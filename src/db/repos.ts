@@ -110,6 +110,11 @@ export function createRepos(db: Database.Database) {
       return row ? rowToPlaylist(row) : undefined
     },
 
+    list(): PlaylistRow[] {
+      const rows = db.prepare('SELECT * FROM playlists ORDER BY id').all() as Record<string, unknown>[]
+      return rows.map(rowToPlaylist)
+    },
+
     patch(id: number, partial: { name?: string; enabled?: number }): PlaylistRow {
       const existing = db.prepare('SELECT * FROM playlists WHERE id = ?').get(id) as Record<string, unknown> | undefined
       if (!existing) {
