@@ -105,6 +105,11 @@ export function createRepos(db: Database.Database) {
       return rowToPlaylist(row as Record<string, unknown>)
     },
 
+    get(id: number): PlaylistRow | undefined {
+      const row = db.prepare('SELECT * FROM playlists WHERE id = ?').get(id) as Record<string, unknown> | undefined
+      return row ? rowToPlaylist(row) : undefined
+    },
+
     patch(id: number, partial: { name?: string; enabled?: number }): PlaylistRow {
       const existing = db.prepare('SELECT * FROM playlists WHERE id = ?').get(id) as Record<string, unknown> | undefined
       if (!existing) {
@@ -124,6 +129,22 @@ export function createRepos(db: Database.Database) {
       db.prepare(
         `UPDATE playlists SET name = @name, name_custom = @name_custom, enabled = @enabled, updated_at = @updated_at WHERE id = @id`,
       ).run({ id, name, name_custom, enabled, updated_at: now })
+      const row = db.prepare('SELECT * FROM playlists WHERE id = ?').get(id)
+      return rowToPlaylist(row as Record<string, unknown>)
+    },
+
+    /** Update name/save_dir after snapshot refresh without flipping name_custom. */
+    updateAfterRefresh(id: number, partial: { name?: string; save_dir?: string }): PlaylistRow {
+      const existing = db.prepare('SELECT * FROM playlists WHERE id = ?').get(id) as Record<string, unknown> | undefined
+      if (!existing) {
+        throw new Error(`playlist not found: ${id}`)
+      }
+      const now = Date.now()
+      const name = partial.name !== undefined ? partial.name : (existing.name as string)
+      const save_dir = partial.save_dir !== undefined ? partial.save_dir : (existing.save_dir as string)
+      db.prepare(
+        `UPDATE playlists SET name = @name, save_dir = @save_dir, updated_at = @updated_at WHERE id = @id`,
+      ).run({ id, name, save_dir, updated_at: now })
       const row = db.prepare('SELECT * FROM playlists WHERE id = ?').get(id)
       return rowToPlaylist(row as Record<string, unknown>)
     },
