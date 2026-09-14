@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "bin": {
+    "lx-sync": "./bin/lx-sync.mjs"
+  },
   "scripts": {
     "test": "vitest run",
     "dev": "tsx watch src/index.ts",
@@ -11,6 +14,7 @@
   "dependencies": {
     "@hono/node-server": "^2.1.1",
     "better-sqlite3": "^11.8.1",
+    "commander": "^14.0.0",
     "hono": "^4.13.7",
     "needle": "^3.5.0",
     "tunnel": "^0.0.6",
