@@ -6,6 +6,7 @@ export type { Database }
 export function openDb(filePath: string): Database.Database {
   const db = new Database(filePath)
   db.pragma('journal_mode = WAL')
+  db.pragma('foreign_keys = ON')
   db.exec(SCHEMA_SQL)
   return db
 }

@@ -6,10 +6,13 @@ import { openDb } from '../src/db/index'
 import { createRepos } from '../src/db/repos'
 
 describe('playlists and downloads', () => {
-  it('keeps downloads after playlist remove', () => {
+  it('remove cascades playlist_tracks and keeps downloads', () => {
     const db = openDb(join(mkdtempSync(join(tmpdir(), 'tg-')), 't.db'))
     const repos = createRepos(db)
     const p = repos.playlists.insert({ source: 'wy', url: 'https://music.163.com/playlist?id=1' })
+    repos.tracks.replaceAll(p.id, [
+      { playlist_id: p.id, song_key: 'wy_1', name: 'a', singer: 'b', album: '', qualitys: '[]', raw: '{}' },
+    ])
     repos.downloads.upsert({
       song_key: 'wy_1',
       file_path: '/tmp/a.mp3',
@@ -18,7 +21,9 @@ describe('playlists and downloads', () => {
       source_kind: 'playlist',
       completed_at: Date.now(),
     })
+    expect(repos.tracks.list(p.id)).toHaveLength(1)
     repos.playlists.remove(p.id)
+    expect(repos.tracks.list(p.id)).toEqual([])
     expect(repos.downloads.get('wy_1')?.file_path).toBe('/tmp/a.mp3')
   })
 
