@@ -123,7 +123,7 @@ function buildProgram(deps: CliDeps): Command {
         deps.error('not implemented')
         throw new CommanderError(2, 'serve', 'not implemented')
       }
-      await deps.startServe({ static: false, cron: false })
+      await deps.startServe({ static: true, cron: true })
     })
 
   return program

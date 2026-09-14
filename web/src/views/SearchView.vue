@@ -1,33 +1,61 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { Input, Select, message } from 'ant-design-vue'
-import { searchHits, sourceLabels, type SourceId, type SearchHit } from '../mock/data'
+import { api } from '../api'
+import { sourceLabels, type SourceId, type SearchHit } from '../mock/data'
 
 const q = ref('')
 const source = ref<SourceId | 'all'>('all')
 const hits = ref<SearchHit[]>([])
 const searched = ref(false)
+const searching = ref(false)
+const pressing = ref<string | null>(null)
 
 const sourceOptions = [
   { value: 'all', label: '全部源' },
   ...(Object.keys(sourceLabels) as SourceId[]).map(id => ({ value: id, label: sourceLabels[id] })),
 ]
 
-function runSearch() {
+async function runSearch() {
   if (!q.value.trim()) {
     message.error('先写下歌名或歌手')
     return
   }
+  searching.value = true
   searched.value = true
-  hits.value = searchHits.filter((h) => {
-    const text = `${h.name}${h.singer}`.includes(q.value.trim())
-    const src = source.value === 'all' || h.source === source.value
-    return text && src
-  })
+  try {
+    const body = await api.search(source.value, q.value.trim())
+    hits.value = (body.list ?? []).map((m: Record<string, unknown>) => ({
+      songKey: String(m.id),
+      name: String(m.name ?? ''),
+      singer: String(m.singer ?? ''),
+      source: m.source as SourceId,
+    }))
+  } catch (err) {
+    hits.value = []
+    message.error(err instanceof Error ? err.message : '查找失败')
+  } finally {
+    searching.value = false
+  }
 }
 
-function press(hit: SearchHit) {
-  message.success(`压进 search/：${hit.name}`)
+async function press(hit: SearchHit) {
+  pressing.value = hit.songKey
+  try {
+    await api.download({
+      id: hit.songKey,
+      name: hit.name,
+      singer: hit.singer,
+      source: hit.source,
+      interval: null,
+      meta: {},
+    })
+    message.success(`压进 search/：${hit.name}`)
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : '压不进去')
+  } finally {
+    pressing.value = null
+  }
 }
 </script>
 
@@ -46,7 +74,7 @@ function press(hit: SearchHit) {
         <Select v-model:value="source" :options="sourceOptions" />
       </label>
       <div class="flex items-end">
-        <a-button type="primary" html-type="submit" class="stamp !h-11 !text-ink w-full md:w-auto">
+        <a-button type="primary" html-type="submit" class="stamp !h-11 !text-ink w-full md:w-auto" :loading="searching">
           查找
         </a-button>
       </div>
@@ -63,7 +91,14 @@ function press(hit: SearchHit) {
           <span class="block">{{ h.name }}</span>
           <span class="text-sm text-[#5c4638]">{{ h.singer }} · {{ sourceLabels[h.source] }}</span>
         </span>
-        <a-button type="primary" class="stamp !text-ink" @click="press(h)">压进磁盘</a-button>
+        <a-button
+          type="primary"
+          class="stamp !text-ink"
+          :loading="pressing === h.songKey"
+          @click="press(h)"
+        >
+          压进磁盘
+        </a-button>
       </li>
     </ol>
 

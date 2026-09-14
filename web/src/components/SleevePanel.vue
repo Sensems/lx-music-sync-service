@@ -1,19 +1,21 @@
 <script setup lang="ts">
-import { Switch, message } from 'ant-design-vue'
+import { Switch } from 'ant-design-vue'
 import type { Playlist, Track } from '../mock/data'
 import { sourceLabels } from '../mock/data'
 
 const props = defineProps<{
   playlist: Playlist
   tracks: Track[]
+  syncing?: boolean
 }>()
 
 const emit = defineEmits<{
   'update:enabled': [value: boolean]
+  press: []
 }>()
 
 function press() {
-  message.success(`已开始压盘：${props.playlist.name}`)
+  emit('press')
 }
 </script>
 
@@ -30,13 +32,13 @@ function press() {
           <Switch :checked="playlist.enabled" @change="(v) => emit('update:enabled', Boolean(v))" />
           <span>{{ playlist.enabled ? '参与定时' : '先搁着' }}</span>
         </label>
-        <a-button type="primary" class="stamp !h-11 !px-5 !text-ink" :loading="false" @click="press">
+        <a-button type="primary" class="stamp !h-11 !px-5 !text-ink" :loading="props.syncing" @click="press">
           压盘
         </a-button>
       </div>
     </header>
 
-    <ol class="list-none p-0 m-0 flex flex-col gap-1">
+    <ol v-if="tracks.length" class="list-none p-0 m-0 flex flex-col gap-1">
       <li
         v-for="(t, i) in tracks"
         :key="t.songKey"
@@ -53,5 +55,6 @@ function press() {
         </span>
       </li>
     </ol>
+    <p v-else class="text-sm text-[#5c4638] m-0">还没有曲目。点「压盘」从线上拉开内页。</p>
   </article>
 </template>

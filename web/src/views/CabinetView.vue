@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { Input, InputNumber, Select, Switch, Upload, message } from 'ant-design-vue'
-import type { UploadChangeParam } from 'ant-design-vue'
+import type { UploadRequestOption } from 'ant-design-vue/es/vc-upload/interface'
+import { api } from '../api'
 
 const settings = reactive({
   savePath: './data/music',
@@ -17,11 +18,13 @@ const settings = reactive({
 })
 
 const sourceMeta = ref({
-  loaded: true,
-  name: 'example-source',
-  version: '1.2.0',
-  status: '已就绪 · kw / kg / tx / wy / mg',
+  loaded: false,
+  name: '',
+  version: '',
+  status: '还没放脚本，搜得到也压不进去',
 })
+
+const saving = ref(false)
 
 const qualityOptions = [
   { value: '128k', label: '128k' },
@@ -42,21 +45,85 @@ const nameOptions = [
   { value: 'name', label: '歌名' },
 ]
 
-function save() {
-  message.success('柜门已关上，设置写下了')
-}
+function applySettings(body: Record<string, unknown>) {
+  settings.savePath = String(body.savePath ?? './data/music')
+  settings.quality = String(body.quality ?? '320k')
+  settings.scheduleOn = body.scheduleOn === '1' || body.scheduleOn === true
+  settings.schedule = String(body.schedule ?? 'every-6h')
+  settings.cron = String(body.cron ?? '0 */6 * * *')
+  settings.concurrency = Number(body.concurrency ?? 3) || 3
+  settings.fileName = String(body.fileName ?? 'name-singer')
+  settings.proxyOn = body.proxyOn === '1' || body.proxyOn === true
+  settings.proxyHost = String(body.proxyHost || '127.0.0.1')
+  settings.proxyPort = Number(body.proxyPort || 7890) || 7890
 
-function onScript({ file }: UploadChangeParam) {
-  if (file.status === 'done' || file.originFileObj) {
-    sourceMeta.value = {
-      loaded: true,
-      name: file.name.replace(/\.js$/i, ''),
-      version: '本地稿',
-      status: '已换上，重启取值后看 inited',
-    }
-    message.success('源脚本已放进柜子')
+  const ok = body.sourceOk === true || body.sourceOk === '1'
+  const name = String(body.name || '')
+  const version = String(body.version || '')
+  sourceMeta.value = {
+    loaded: Boolean(name),
+    name,
+    version,
+    status: ok
+      ? `已就绪 · ${name || '源'}`
+      : String(body.sourceMessage || '源未就绪'),
   }
 }
+
+async function load() {
+  try {
+    const body = await api.settings()
+    applySettings(body)
+  } catch {
+    message.error('柜门读不到设置')
+  }
+}
+
+async function save() {
+  saving.value = true
+  try {
+    const body = await api.putSettings({
+      savePath: settings.savePath,
+      quality: settings.quality,
+      scheduleOn: settings.scheduleOn ? '1' : '0',
+      schedule: settings.schedule,
+      cron: settings.cron,
+      concurrency: String(settings.concurrency),
+      fileName: settings.fileName,
+      proxyOn: settings.proxyOn ? '1' : '0',
+      proxyHost: settings.proxyHost,
+      proxyPort: String(settings.proxyPort),
+    })
+    applySettings(body)
+    message.success('柜门已关上，设置写下了')
+  } catch {
+    message.error('写设置失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function uploadScript(option: UploadRequestOption) {
+  const file = option.file as File
+  try {
+    const status = await api.uploadUserApi(file)
+    sourceMeta.value = {
+      loaded: true,
+      name: String(status.name || file.name.replace(/\.js$/i, '')),
+      version: String(status.version || ''),
+      status: status.ok ? `已就绪 · ${status.name || ''}` : String(status.message || '源加载失败'),
+    }
+    message.success('源脚本已放进柜子')
+    option.onSuccess?.(status)
+  } catch (err) {
+    message.error('脚本放不进去')
+    option.onError?.(err as Error)
+  }
+}
+
+onMounted(() => {
+  void load()
+})
 </script>
 
 <template>
@@ -71,7 +138,7 @@ function onScript({ file }: UploadChangeParam) {
           {{ sourceMeta.loaded ? `${sourceMeta.name} · ${sourceMeta.version}` : '还没放脚本，搜得到也压不进去' }}
         </p>
         <p class="font-mono text-xs text-foil m-0 mb-3">{{ sourceMeta.status }}</p>
-        <Upload :show-upload-list="false" accept=".js" :custom-request="({ onSuccess }: any) => onSuccess?.('ok')" @change="onScript">
+        <Upload :show-upload-list="false" accept=".js" :custom-request="uploadScript">
           <a-button class="stamp">更换 .js</a-button>
         </Upload>
       </div>
@@ -124,7 +191,7 @@ function onScript({ file }: UploadChangeParam) {
         </label>
       </div>
 
-      <a-button type="primary" class="stamp !text-ink self-start" @click="save">写下这些</a-button>
+      <a-button type="primary" class="stamp !text-ink self-start" :loading="saving" @click="save">写下这些</a-button>
     </div>
   </section>
 </template>

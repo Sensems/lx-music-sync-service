@@ -2,10 +2,13 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Hono } from 'hono'
 import type { createRepos, DownloadRow, JobRow, PlaylistRow } from '../db/repos.js'
-import { proxyFromSettings } from '../sdk/proxy.js'
 import type { MusicInfo, OnlineSource } from '../types.js'
 import type { SourceStatus } from '../userApi/runtime.js'
 import type { SyncProgress } from '../services/sync.js'
+import {
+  applyProxyFromSettings,
+  createSettingsService,
+} from '../services/settings.js'
 
 type Repos = ReturnType<typeof createRepos>
 
@@ -30,35 +33,8 @@ export type AppCtx = {
     getStatus(): SourceStatus
     setProxy(proxy: { host: string; port: number } | null): void
   }
-}
-
-const SETTINGS_WRITABLE = new Set([
-  'savePath',
-  'quality',
-  'scheduleOn',
-  'schedule',
-  'cron',
-  'concurrency',
-  'fileName',
-  'proxyOn',
-  'proxyHost',
-  'proxyPort',
-])
-
-function settingsWithSource(repos: Repos, runtime: AppCtx['runtime']) {
-  const settings = repos.settings.getAll()
-  const status = runtime.getStatus()
-  return {
-    ...settings,
-    name: status.name ?? '',
-    version: status.version ?? '',
-    sourceOk: status.ok,
-    sourceMessage: status.message,
-  }
-}
-
-function applyProxyFromSettings(repos: Repos, runtime: AppCtx['runtime']) {
-  runtime.setProxy(proxyFromSettings(repos.settings.getAll()))
+  /** Called after schedule-related settings change so serve can reschedule cron. */
+  rescheduleCron?: () => void
 }
 
 function parseEnabled(value: unknown): number | undefined {
@@ -104,9 +80,23 @@ async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<R
 export function createApp(ctx: AppCtx): Hono {
   const app = new Hono()
   const { repos, sync, search, runtime, dataDir } = ctx
+  const settings = createSettingsService({
+    repos,
+    runtime,
+    rescheduleCron: ctx.rescheduleCron,
+  })
 
   app.get('/api/playlists', c => {
-    return c.json({ list: repos.playlists.list() })
+    const downloadKeys = new Set(repos.downloads.list().map(d => d.song_key))
+    const list = repos.playlists.list().map(p => {
+      const tracks = repos.tracks.list(p.id)
+      return {
+        ...p,
+        trackCount: tracks.length,
+        downloaded: tracks.filter(t => downloadKeys.has(t.song_key)).length,
+      }
+    })
+    return c.json({ list })
   })
 
   app.post('/api/playlists', async c => {
@@ -141,6 +131,24 @@ export function createApp(ctx: AppCtx): Hono {
     }
     repos.playlists.remove(id)
     return c.body(null, 204)
+  })
+
+  app.get('/api/playlists/:id/tracks', c => {
+    const id = Number(c.req.param('id'))
+    if (!Number.isFinite(id) || !repos.playlists.get(id)) {
+      return c.json({ error: 'not found' }, 404)
+    }
+    const tracks = repos.tracks.list(id)
+    const downloads = new Set(repos.downloads.list().map(d => d.song_key))
+    return c.json({
+      list: tracks.map(t => ({
+        songKey: t.song_key,
+        name: t.name,
+        singer: t.singer,
+        album: t.album,
+        downloaded: downloads.has(t.song_key),
+      })),
+    })
   })
 
   app.post('/api/playlists/:id/sync', async c => {
@@ -195,28 +203,12 @@ export function createApp(ctx: AppCtx): Hono {
   })
 
   app.get('/api/settings', c => {
-    return c.json(settingsWithSource(repos, runtime))
+    return c.json(settings.get())
   })
 
   app.put('/api/settings', async c => {
     const body = await readJson(c)
-    const partial: Record<string, string> = {}
-    for (const [key, value] of Object.entries(body)) {
-      if (!SETTINGS_WRITABLE.has(key)) continue
-      if (value === undefined || value === null) continue
-      partial[key] = String(value)
-    }
-    if (Object.keys(partial).length) {
-      repos.settings.setMany(partial)
-    }
-    if (
-      'proxyOn' in partial ||
-      'proxyHost' in partial ||
-      'proxyPort' in partial
-    ) {
-      applyProxyFromSettings(repos, runtime)
-    }
-    return c.json(settingsWithSource(repos, runtime))
+    return c.json(settings.put(body))
   })
 
   app.post('/api/settings/user-api', async c => {

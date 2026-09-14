@@ -1,7 +1,44 @@
 <script setup lang="ts">
-import { jobLines } from '../mock/data'
+import { onMounted, onUnmounted, ref } from 'vue'
+import { api } from '../api'
 
-const live = jobLines.find(l => l.kind === 'run')
+const live = ref<{ title: string; detail: string } | null>(null)
+let timer: ReturnType<typeof setInterval> | undefined
+
+async function refresh() {
+  try {
+    const body = await api.jobs()
+    const running = body.running as { songKey: string; downloaded: number; total: number | null } | null
+    if (running) {
+      const total = running.total != null ? `${(running.total / 1e6).toFixed(1)} MB` : '?'
+      live.value = {
+        title: '压盘中',
+        detail: `${running.songKey}  ${(running.downloaded / 1e6).toFixed(1)} / ${total}`,
+      }
+      return
+    }
+    const runJob = (body.list ?? []).find((j: { status: string }) => j.status === 'running')
+    if (runJob) {
+      live.value = {
+        title: runJob.kind === 'all' ? '压盘中 · 全部' : `压盘中 · #${runJob.playlist_id ?? '?'}`,
+        detail: `扫 ${runJob.scanned} · 新压 ${runJob.downloaded}`,
+      }
+      return
+    }
+    live.value = null
+  } catch {
+    /* keep */
+  }
+}
+
+onMounted(() => {
+  void refresh()
+  timer = setInterval(() => void refresh(), 2000)
+})
+
+onUnmounted(() => {
+  if (timer) clearInterval(timer)
+})
 </script>
 
 <template>

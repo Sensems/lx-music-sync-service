@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { serve as honoServe } from '@hono/node-server'
+import { serveStatic } from '@hono/node-server/serve-static'
+import cron from 'node-cron'
 import { loadConfig, type AppConfig } from './config.js'
 import { openDb } from './db/index.js'
 import { createRepos } from './db/repos.js'
@@ -12,6 +14,59 @@ import { createPlaylistService } from './services/playlists.js'
 import { createSearchService } from './services/search.js'
 import { createSyncService } from './services/sync.js'
 import { createUserApiRuntime } from './userApi/runtime.js'
+
+export type CronSettings = {
+  scheduleOn?: string
+  schedule?: string
+  cron?: string
+}
+
+export type CronDeps = {
+  getSettings: () => CronSettings
+  schedule: (expr: string, fn: () => void) => { stop: () => void } | void
+  syncAll: () => Promise<unknown>
+}
+
+export type CronHandle = {
+  stop: () => void
+  reschedule: () => void
+}
+
+export function resolveCronExpression(settings: CronSettings): string {
+  if (settings.schedule === 'every-6h') return '0 */6 * * *'
+  if (settings.schedule === 'daily') return '0 3 * * *'
+  if (settings.schedule === 'cron' && settings.cron?.trim()) return settings.cron.trim()
+  if (settings.cron?.trim()) return settings.cron.trim()
+  return '0 */6 * * *'
+}
+
+/** Injectable cron scheduler for tests and serve. Default schedule is OFF. */
+export function startCron(deps: CronDeps): CronHandle {
+  let task: { stop: () => void } | null = null
+
+  const stop = () => {
+    task?.stop()
+    task = null
+  }
+
+  const reschedule = () => {
+    stop()
+    const settings = deps.getSettings()
+    if (settings.scheduleOn !== '1') return
+    const expr = resolveCronExpression(settings)
+    const scheduled = deps.schedule(expr, () => {
+      void deps.syncAll().catch(err => {
+        console.error('cron sync failed', err)
+      })
+    })
+    if (scheduled && typeof scheduled.stop === 'function') {
+      task = scheduled
+    }
+  }
+
+  reschedule()
+  return { stop, reschedule }
+}
 
 export async function createAppContext(config?: AppConfig): Promise<AppCtx> {
   const cfg = config ?? loadConfig()
@@ -60,15 +115,37 @@ export type ServeOptions = {
 }
 
 export async function startServe(opts: ServeOptions = {}): Promise<void> {
-  const withStatic = opts.static ?? false
-  const withCron = opts.cron ?? false
-  if (withStatic || withCron) {
-    throw new Error('static/cron not implemented yet')
-  }
+  const withStatic = opts.static ?? true
+  const withCron = opts.cron ?? true
 
   const config = loadConfig()
   const ctx = await createAppContext(config)
+
+  let cronHandle: CronHandle | null = null
+  if (withCron) {
+    cronHandle = startCron({
+      getSettings: () => ctx.repos.settings.getAll(),
+      schedule: (expr, fn) => cron.schedule(expr, fn),
+      syncAll: () => ctx.sync.syncAll(),
+    })
+    ctx.rescheduleCron = () => cronHandle?.reschedule()
+  }
+
   const app = createApp(ctx)
+
+  if (withStatic) {
+    const distRoot = resolve(process.cwd(), 'web/dist')
+    if (!existsSync(distRoot)) {
+      console.warn(`web/dist missing at ${distRoot}; run: npm --prefix web run build`)
+    }
+    app.use(
+      '/*',
+      serveStatic({
+        root: './web/dist',
+      }),
+    )
+    app.get('*', serveStatic({ path: './web/dist/index.html' }))
+  }
 
   honoServe(
     {
