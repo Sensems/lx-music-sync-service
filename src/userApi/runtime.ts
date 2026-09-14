@@ -202,6 +202,126 @@ const emptyStatus = (): SourceStatus => ({
   sources: {},
 })
 
+type CeruMusicUrl = (
+  source: string,
+  musicInfo: Record<string, unknown>,
+  quality: string,
+) => Promise<string> | string
+
+type CeruPluginExports = {
+  pluginInfo?: { name?: string; version?: string; author?: string; description?: string }
+  sources?: Record<string, { name?: string; qualitys?: string[] }>
+  musicUrl?: CeruMusicUrl
+}
+
+/** CeruMusic (澜音) plugins use `cerumusic` + module.exports; LX scripts use lx.on/lx.send. */
+export function detectScriptKind(script: string): 'ceru' | 'lx' {
+  if (/\bcerumusic\b/.test(script) && /\bmodule\.exports\b/.test(script)) return 'ceru'
+  if (/\bcerumusic\b/.test(script) && !/\blx\.(on|send)\b/.test(script)) return 'ceru'
+  return 'lx'
+}
+
+const filterCeruSources = (
+  sources: CeruPluginExports['sources'] | null | undefined,
+): SourceStatus['sources'] => {
+  if (!sources || typeof sources !== 'object') throw new Error('Invalid plugin structure')
+  const out: SourceStatus['sources'] = {}
+  for (const source of allSources) {
+    const userSource = sources[source]
+    if (!userSource) continue
+    const qualitys = supportQualitys[source] ?? []
+    out[source] = {
+      actions: ['musicUrl'],
+      qualitys: qualitys.filter(q => (userSource.qualitys ?? []).includes(q)),
+    }
+  }
+  return out
+}
+
+/** Flatten MusicInfo so Ceru plugins can read songmid/hash on the top level. */
+export function toCeruMusicInfo(musicInfo: MusicInfo): Record<string, unknown> {
+  const meta = musicInfo.meta ?? {}
+  return {
+    ...meta,
+    id: musicInfo.id,
+    name: musicInfo.name,
+    singer: musicInfo.singer,
+    source: musicInfo.source,
+    interval: musicInfo.interval,
+    songmid: meta.songId ?? meta.songmid ?? musicInfo.id,
+    hash: meta.hash,
+    meta,
+  }
+}
+
+type CeruRequestResponse = {
+  statusCode: number
+  statusMessage?: string
+  headers: Record<string, unknown>
+  body: unknown
+}
+
+const ceruRequest = (
+  url: string,
+  options: LxRequestOptions = {},
+  callback?: (err: Error | null, resp: CeruRequestResponse | null) => void,
+) => {
+  const run = (
+    cb: (err: Error | null, resp: CeruRequestResponse | null) => void,
+  ) =>
+    lxRequest(url, options, (err, resp) => {
+      if (err) {
+        cb(err, {
+          statusCode: /timeout/i.test(err.message) ? 408 : 500,
+          headers: {},
+          body: { error: 'RequestError', message: err.message, url },
+        })
+        return
+      }
+      cb(null, resp as CeruRequestResponse)
+    })
+
+  if (typeof callback === 'function') {
+    run(callback)
+    return
+  }
+
+  return new Promise<CeruRequestResponse>(resolve => {
+    run((_err, resp) => {
+      resolve(
+        resp ?? {
+          statusCode: 500,
+          headers: {},
+          body: { error: 'RequestError', message: 'unknown', url },
+        },
+      )
+    })
+  })
+}
+
+const createCeruApi = (opts: { stopRequests: (message?: string, seconds?: number) => void }) => ({
+  env: 'desktop' as const,
+  version: '1.9.11',
+  request: ceruRequest,
+  utils: createLxUtils(),
+  NoticeCenter(type: string, data?: { title?: string; content?: string }) {
+    const title = data?.title ?? ''
+    const content = data?.content ?? ''
+    const line = `[cerumusic:${type}] ${title}${content ? ` — ${content}` : ''}`
+    if (type === 'error') console.error(line)
+    else if (type === 'warn') console.warn(line)
+    else console.log(line)
+  },
+  stopRequests: opts.stopRequests,
+})
+
+function assertHttpUrl(response: unknown): string {
+  if (typeof response != 'string' || response.length > 2048 || !/^https?:/.test(response)) {
+    throw new Error('failed')
+  }
+  return response
+}
+
 export function createUserApiRuntime(): {
   load(script: string): Promise<SourceStatus>
   getMusicUrl(source: string, musicInfo: MusicInfo, quality: Quality): Promise<{ type: Quality; url: string }>
@@ -210,12 +330,15 @@ export function createUserApiRuntime(): {
   dispose(): void
 } {
   let requestHandler: RequestHandler | null = null
+  let ceruMusicUrl: CeruMusicUrl | null = null
+  let blockedUntil = 0
   let disposed = false
   let lastStatus: SourceStatus = emptyStatus()
 
   const dispose = () => {
     disposed = true
     requestHandler = null
+    ceruMusicUrl = null
   }
 
   const getStatus = () => lastStatus
@@ -224,22 +347,13 @@ export function createUserApiRuntime(): {
     setSdkProxy(proxy)
   }
 
-  const load = async (script: string): Promise<SourceStatus> => {
-    if (disposed) throw new Error('Runtime disposed')
-    requestHandler = null
-    lastStatus = emptyStatus()
-
-    let scriptInfo: ReturnType<typeof parseScriptInfo>
-    try {
-      scriptInfo = parseScriptInfo(script)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      return { ok: false, message, sources: {} }
-    }
-
+  const loadLx = async (
+    script: string,
+    scriptInfo: ReturnType<typeof parseScriptInfo>,
+  ): Promise<SourceStatus> => {
     let settled = false
     let resolveStatus!: (status: SourceStatus) => void
-    const statusPromise = new Promise<SourceStatus>((resolve) => {
+    const statusPromise = new Promise<SourceStatus>(resolve => {
       resolveStatus = resolve
     })
 
@@ -346,7 +460,89 @@ export function createUserApiRuntime(): {
       })
     }
 
-    lastStatus = await statusPromise
+    return statusPromise
+  }
+
+  const loadCeru = async (
+    script: string,
+    scriptInfo: ReturnType<typeof parseScriptInfo>,
+  ): Promise<SourceStatus> => {
+    const moduleObj: { exports: CeruPluginExports } = { exports: {} }
+    const cerumusic = createCeruApi({
+      stopRequests(_message?: string, seconds = 60) {
+        const secs = typeof seconds === 'number' && seconds > 0 ? seconds : 60
+        blockedUntil = Date.now() + secs * 1000
+      },
+    })
+
+    const ctx = vm.createContext({
+      cerumusic,
+      console,
+      Buffer,
+      module: moduleObj,
+      exports: moduleObj.exports,
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+      require() {
+        throw new Error('require is not allowed')
+      },
+    })
+
+    try {
+      vm.runInContext(script, ctx, { timeout: SCRIPT_TIMEOUT_MS })
+      const plugin = (ctx.module as { exports: CeruPluginExports }).exports
+      if (!plugin?.pluginInfo || !plugin.sources || typeof plugin.musicUrl !== 'function') {
+        return {
+          ok: false,
+          message: 'Invalid plugin structure',
+          name: scriptInfo.name,
+          version: scriptInfo.version,
+          sources: {},
+        }
+      }
+      ceruMusicUrl = plugin.musicUrl.bind(plugin)
+      const sources = filterCeruSources(plugin.sources)
+      return {
+        ok: true,
+        message: '',
+        name: plugin.pluginInfo.name || scriptInfo.name,
+        version: plugin.pluginInfo.version || scriptInfo.version,
+        sources,
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return {
+        ok: false,
+        message,
+        name: scriptInfo.name,
+        version: scriptInfo.version,
+        sources: {},
+      }
+    }
+  }
+
+  const load = async (script: string): Promise<SourceStatus> => {
+    if (disposed) throw new Error('Runtime disposed')
+    requestHandler = null
+    ceruMusicUrl = null
+    blockedUntil = 0
+    lastStatus = emptyStatus()
+
+    let scriptInfo: ReturnType<typeof parseScriptInfo>
+    try {
+      scriptInfo = parseScriptInfo(script)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      lastStatus = { ok: false, message, sources: {} }
+      return lastStatus
+    }
+
+    lastStatus =
+      detectScriptKind(script) === 'ceru'
+        ? await loadCeru(script, scriptInfo)
+        : await loadLx(script, scriptInfo)
     return lastStatus
   }
 
@@ -356,25 +552,36 @@ export function createUserApiRuntime(): {
     quality: Quality,
   ): Promise<{ type: Quality; url: string }> => {
     if (disposed) throw new Error('Runtime disposed')
+    if (Date.now() < blockedUntil) throw new Error('requests temporarily stopped')
+
+    if (ceruMusicUrl) {
+      const handler = ceruMusicUrl
+      const response = await Promise.race([
+        Promise.resolve(handler(source, toCeruMusicInfo(musicInfo), quality)),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('timeout')), GET_MUSIC_URL_TIMEOUT_MS)
+        }),
+      ])
+      return { type: quality, url: assertHttpUrl(response) }
+    }
+
     if (!requestHandler) throw new Error('Request event is not defined')
 
     const handler = requestHandler
     const response = await Promise.race([
-      Promise.resolve(handler({
-        source,
-        action: 'musicUrl',
-        info: { type: quality, musicInfo },
-      })),
+      Promise.resolve(
+        handler({
+          source,
+          action: 'musicUrl',
+          info: { type: quality, musicInfo },
+        }),
+      ),
       new Promise<never>((_, reject) => {
         setTimeout(() => reject(new Error('timeout')), GET_MUSIC_URL_TIMEOUT_MS)
       }),
     ])
 
-    if (typeof response != 'string' || response.length > 2048 || !/^https?:/.test(response)) {
-      throw new Error('failed')
-    }
-
-    return { type: quality, url: response }
+    return { type: quality, url: assertHttpUrl(response) }
   }
 
   return { load, getMusicUrl, getStatus, setProxy, dispose }

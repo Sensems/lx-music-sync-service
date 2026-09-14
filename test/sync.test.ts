@@ -204,18 +204,55 @@ describe('sync', () => {
     expect(readFileSync(row.file_path).equals(before)).toBe(true)
   })
 
-  it('skips reentrant syncAll', async () => {
+  it('queues concurrent sync jobs instead of skipping', async () => {
+    const h = makeHarness({ hangRefresh: true })
+    const p1 = h.repos.playlists.insert({ source: 'wy', url: '111' })
+    const p2 = h.repos.playlists.insert({ source: 'wy', url: '222' })
+
+    const firstPromise = h.sync.syncPlaylist(p1.id)
+    await new Promise(r => setTimeout(r, 20))
+    const secondPromise = h.sync.syncPlaylist(p2.id)
+
+    let secondSettled = false
+    void secondPromise.then(() => {
+      secondSettled = true
+    })
+    await new Promise(r => setTimeout(r, 20))
+    expect(secondSettled).toBe(false)
+
+    h.releaseHang()
+    const first = await firstPromise
+    expect(first.status).toBe('success')
+    expect(first.playlist_id).toBe(p1.id)
+
+    const second = await secondPromise
+    expect(second.status).toBe('success')
+    expect(second.playlist_id).toBe(p2.id)
+    expect(second.id).not.toBe(first.id)
+  })
+
+  it('queues reentrant syncAll behind the active job', async () => {
     const h = makeHarness({ hangRefresh: true })
     h.repos.playlists.insert({ source: 'wy', url: '123' })
 
     const firstPromise = h.sync.syncAll()
     await new Promise(r => setTimeout(r, 20))
-    const second = await h.sync.syncAll()
-    expect(second.status).toBe('skipped')
+    const secondPromise = h.sync.syncAll()
+
+    let secondSettled = false
+    void secondPromise.then(() => {
+      secondSettled = true
+    })
+    await new Promise(r => setTimeout(r, 20))
+    expect(secondSettled).toBe(false)
 
     h.releaseHang()
     const first = await firstPromise
     expect(first.status).toBe('success')
+
+    const second = await secondPromise
+    expect(second.status).toBe('success')
+    expect(second.id).not.toBe(first.id)
   })
 
   it('search download lands under search/ and later playlist skip', async () => {

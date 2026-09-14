@@ -14,6 +14,7 @@ const SETTINGS_WRITABLE = new Set([
   'quality',
   'scheduleOn',
   'schedule',
+  'scheduleTime',
   'cron',
   'concurrency',
   'fileName',
@@ -72,6 +73,7 @@ export function createSettingsService(opts: {
       if (
         'scheduleOn' in partial ||
         'schedule' in partial ||
+        'scheduleTime' in partial ||
         'cron' in partial
       ) {
         opts.rescheduleCron?.()

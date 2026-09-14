@@ -41,6 +41,17 @@ describe('startCron', () => {
     expect(scheduled).toEqual(['0 3 * * *'])
 
     scheduled.length = 0
+    startCron({
+      getSettings: () => ({ scheduleOn: '1', schedule: 'daily', scheduleTime: '14:30', cron: '' }),
+      schedule(expr) {
+        scheduled.push(expr)
+        return { stop() {} }
+      },
+      syncAll: async () => {},
+    })
+    expect(scheduled).toEqual(['30 14 * * *'])
+
+    scheduled.length = 0
     const handle = startCron({
       getSettings: () => ({ scheduleOn: '1', schedule: 'cron', cron: '15 4 * * *' }),
       schedule(expr) {

@@ -7,9 +7,15 @@ import type { MusicInfo, Quality } from '../types.js'
 import type { SourceStatus } from '../userApi/runtime.js'
 
 export type SyncProgress = {
-  songKey: string
+  /** Tracks finished (scanned) in the active job. */
+  trackDone: number
+  /** Tracks expected in the active job (grows as syncAll refreshes playlists). */
+  trackTotal: number
+  /** 0–100 from trackDone / trackTotal. */
+  percent: number
+  songKey: string | null
   downloaded: number
-  total: number | null
+  byteTotal: number | null
 }
 
 type Repos = ReturnType<typeof createRepos>
@@ -77,6 +83,16 @@ function playlistSaveDir(playlist: PlaylistRow): string {
   return playlist.save_dir || safeDirName(playlist.name || 'unnamed')
 }
 
+function metaFieldsFromMusic(music: MusicInfo, name?: string, singer?: string) {
+  return {
+    name: name || music.name || '',
+    singer: singer || music.singer || '',
+    source: String(music.source || ''),
+    pic_url: String(music.meta?.picUrl || ''),
+    raw: JSON.stringify(music),
+  }
+}
+
 async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
   if (items.length === 0) return
   const queue = items.slice()
@@ -92,24 +108,11 @@ async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Prom
 
 export function createSyncService(deps: SyncDeps) {
   const { repos } = deps
-  let locked = false
   let progress: SyncProgress | null = null
-
-  function insertSkippedJob(kind: JobRow['kind'], playlistId: number | null): JobRow {
-    const now = Date.now()
-    return repos.jobs.insert({
-      kind,
-      playlist_id: playlistId,
-      status: 'skipped',
-      started_at: now,
-      finished_at: now,
-      scanned: 0,
-      skipped: 0,
-      downloaded: 0,
-      failed: 0,
-      error_summary: null,
-    })
-  }
+  let jobTrackDone = 0
+  let jobTrackTotal = 0
+  let draining = false
+  const queue: Array<() => Promise<void>> = []
 
   function emptyCounters(): Counters {
     return { scanned: 0, skipped: 0, downloaded: 0, failed: 0, errors: [] }
@@ -121,6 +124,34 @@ export function createSyncService(deps: SyncDeps) {
     into.downloaded += from.downloaded
     into.failed += from.failed
     into.errors.push(...from.errors)
+  }
+
+  function calcPercent(done: number, total: number): number {
+    if (total <= 0) return 0
+    return Math.min(100, Math.round((done / total) * 100))
+  }
+
+  function patchProgress(partial: Partial<SyncProgress>): void {
+    const base: SyncProgress = progress ?? {
+      trackDone: 0,
+      trackTotal: 0,
+      percent: 0,
+      songKey: null,
+      downloaded: 0,
+      byteTotal: null,
+    }
+    const next = { ...base, ...partial }
+    next.percent = calcPercent(next.trackDone, next.trackTotal)
+    progress = next
+  }
+
+  function bumpTrackProgress(done: number): void {
+    patchProgress({
+      trackDone: done,
+      songKey: progress?.songKey ?? null,
+      downloaded: progress?.downloaded ?? 0,
+      byteTotal: progress?.byteTotal ?? null,
+    })
   }
 
   async function processTrack(opts: {
@@ -158,10 +189,21 @@ export function createSyncService(deps: SyncDeps) {
     const fileName = buildFileName(settings, track.name || music.name, track.singer || music.singer, quality)
     const destPath = join(savePath, saveDir, fileName)
 
+    const finishTrack = () => {
+      jobTrackDone++
+      bumpTrackProgress(jobTrackDone)
+      bumpJob(jobId, counters)
+    }
+
     const existing = repos.downloads.get(track.song_key)
     if (existing && existsSync(existing.file_path)) {
+      // Refresh meta (name/cover/raw) even when the file is already on disk.
+      repos.downloads.upsert({
+        ...existing,
+        ...metaFieldsFromMusic(music, track.name, track.singer),
+      })
       counters.skipped++
-      bumpJob(jobId, counters)
+      finishTrack()
       return
     }
 
@@ -175,9 +217,10 @@ export function createSyncService(deps: SyncDeps) {
             playlist_id: playlistId,
             source_kind: sourceKind,
             completed_at: Date.now(),
+            ...metaFieldsFromMusic(music, track.name, track.singer),
           })
           counters.skipped++
-          bumpJob(jobId, counters)
+          finishTrack()
           return
         }
       } catch {
@@ -188,7 +231,7 @@ export function createSyncService(deps: SyncDeps) {
     if (!sourceOk) {
       counters.failed++
       counters.errors.push({ song_key: track.song_key, message: '源不可用' })
-      bumpJob(jobId, counters)
+      finishTrack()
       return
     }
 
@@ -203,12 +246,24 @@ export function createSyncService(deps: SyncDeps) {
       )
       const actualDest = join(savePath, saveDir, actualName)
       mkdirSync(dirname(actualDest), { recursive: true })
-      progress = { songKey: track.song_key, downloaded: 0, total: null }
+      patchProgress({
+        songKey: track.song_key,
+        downloaded: 0,
+        byteTotal: null,
+        trackDone: jobTrackDone,
+        trackTotal: jobTrackTotal,
+      })
       await deps.downloadFile({
         url,
         destPath: actualDest,
         onProgress: p => {
-          progress = { songKey: track.song_key, downloaded: p.downloaded, total: p.total }
+          patchProgress({
+            songKey: track.song_key,
+            downloaded: p.downloaded,
+            byteTotal: p.total,
+            trackDone: jobTrackDone,
+            trackTotal: jobTrackTotal,
+          })
         },
       })
       repos.downloads.upsert({
@@ -218,6 +273,7 @@ export function createSyncService(deps: SyncDeps) {
         playlist_id: playlistId ?? playlist?.id ?? null,
         source_kind: sourceKind,
         completed_at: Date.now(),
+        ...metaFieldsFromMusic(music, track.name, track.singer),
       })
       counters.downloaded++
     } catch (err) {
@@ -225,7 +281,7 @@ export function createSyncService(deps: SyncDeps) {
       counters.failed++
       counters.errors.push({ song_key: track.song_key, message })
     }
-    bumpJob(jobId, counters)
+    finishTrack()
   }
 
   function bumpJob(jobId: number, counters: Counters): void {
@@ -263,6 +319,15 @@ export function createSyncService(deps: SyncDeps) {
     const tracks = repos.tracks.list(playlistId)
     const concurrency = clampConcurrency(settings.concurrency)
 
+    jobTrackTotal += tracks.length
+    patchProgress({
+      trackTotal: jobTrackTotal,
+      trackDone: jobTrackDone,
+      songKey: null,
+      downloaded: 0,
+      byteTotal: null,
+    })
+
     await mapPool(tracks, concurrency, async track => {
       await processTrack({
         track,
@@ -279,16 +344,21 @@ export function createSyncService(deps: SyncDeps) {
     })
   }
 
-  async function runLocked(
+  async function runJob(
     kind: JobRow['kind'],
     playlistId: number | null,
     work: (job: JobRow, counters: Counters) => Promise<'success' | 'failed'>,
   ): Promise<JobRow> {
-    if (locked) {
-      return insertSkippedJob(kind, playlistId)
+    jobTrackDone = 0
+    jobTrackTotal = 0
+    progress = {
+      trackDone: 0,
+      trackTotal: 0,
+      percent: 0,
+      songKey: null,
+      downloaded: 0,
+      byteTotal: null,
     }
-    locked = true
-    progress = null
     const now = Date.now()
     const job = repos.jobs.insert({
       kind,
@@ -318,7 +388,10 @@ export function createSyncService(deps: SyncDeps) {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (!counters.errors.some(e => e.message === message)) {
-        counters.errors.push({ song_key: playlistId != null ? `playlist:${playlistId}` : 'all', message })
+        counters.errors.push({
+          song_key: playlistId != null ? `playlist:${playlistId}` : 'all',
+          message,
+        })
         counters.failed = Math.max(counters.failed, 1)
       }
       return repos.jobs.update({
@@ -332,21 +405,54 @@ export function createSyncService(deps: SyncDeps) {
         error_summary: JSON.stringify(counters.errors),
       })
     } finally {
-      locked = false
       progress = null
     }
   }
 
+  async function drainQueue(): Promise<void> {
+    if (draining) return
+    draining = true
+    try {
+      while (queue.length > 0) {
+        const next = queue.shift()
+        if (!next) continue
+        await next()
+      }
+    } finally {
+      draining = false
+      if (queue.length > 0) {
+        void drainQueue()
+      }
+    }
+  }
+
+  function enqueueJob(
+    kind: JobRow['kind'],
+    playlistId: number | null,
+    work: (job: JobRow, counters: Counters) => Promise<'success' | 'failed'>,
+  ): Promise<JobRow> {
+    return new Promise<JobRow>((resolve, reject) => {
+      queue.push(async () => {
+        try {
+          resolve(await runJob(kind, playlistId, work))
+        } catch (err) {
+          reject(err)
+        }
+      })
+      void drainQueue()
+    })
+  }
+
   return {
     async syncPlaylist(id: number): Promise<JobRow> {
-      return runLocked('playlist', id, async (job, counters) => {
+      return enqueueJob('playlist', id, async (job, counters) => {
         await syncOnePlaylist(id, job.id, counters)
         return 'success'
       })
     },
 
     async syncAll(): Promise<JobRow> {
-      return runLocked('all', null, async (job, counters) => {
+      return enqueueJob('all', null, async (job, counters) => {
         const playlists = repos.playlists.list().filter(p => p.enabled === 1)
         for (const p of playlists) {
           const local = emptyCounters()
@@ -364,73 +470,145 @@ export function createSyncService(deps: SyncDeps) {
       })
     },
 
-    async downloadSearch(musicInfo: MusicInfo): Promise<DownloadRow> {
-      const settings = repos.settings.getAll()
-      const sourceStatus = deps.getSourceStatus()
-      const savePath = settings.savePath || './data/music'
-      const saveDir = 'search'
-      const sourceKind = 'search' as const
+    async downloadSearch(musicInfo: MusicInfo): Promise<DownloadRow & { alreadyHad?: boolean }> {
+      let result: (DownloadRow & { alreadyHad?: boolean }) | undefined
 
-      const existing = repos.downloads.get(musicInfo.id)
-      if (existing && existsSync(existing.file_path)) {
-        return existing
-      }
+      const job = await enqueueJob('search', null, async (jobRow, counters) => {
+        const settings = repos.settings.getAll()
+        const sourceStatus = deps.getSourceStatus()
+        const savePath = settings.savePath || './data/music'
+        const saveDir = 'search'
+        const sourceKind = 'search' as const
+        const { ensureMusicPic } = await import('./pic.js')
+        const music = await ensureMusicPic(musicInfo)
+        const meta = metaFieldsFromMusic(music)
 
-      if (!sourceStatus.ok) {
-        throw new Error('源不可用')
-      }
-
-      const wanted = (settings.quality || '320k') as Quality
-      const sourceKey = String(musicInfo.source)
-      const sourceQualities = (sourceStatus.sources[sourceKey]?.qualitys ?? []) as Quality[]
-      const quality = pickQuality(
-        wanted,
-        sourceQualities.length ? sourceQualities : [wanted],
-        songQualitiesOf(musicInfo),
-      )
-
-      const { url, type } = await deps.getMusicUrl(sourceKey, musicInfo, quality)
-      const actualQuality = type || quality
-      const fileName = buildFileName(settings, musicInfo.name, musicInfo.singer, actualQuality)
-      const destPath = join(savePath, saveDir, fileName)
-
-      if (!existing && existsSync(destPath) && statSync(destPath).size > 100) {
-        const row: DownloadRow = {
-          song_key: musicInfo.id,
-          file_path: destPath,
-          quality: actualQuality,
-          playlist_id: null,
-          source_kind: sourceKind,
-          completed_at: Date.now(),
-        }
-        repos.downloads.upsert(row)
-        return row
-      }
-
-      mkdirSync(dirname(destPath), { recursive: true })
-      progress = { songKey: musicInfo.id, downloaded: 0, total: null }
-      try {
-        await deps.downloadFile({
-          url,
-          destPath,
-          onProgress: p => {
-            progress = { songKey: musicInfo.id, downloaded: p.downloaded, total: p.total }
-          },
+        jobTrackDone = 0
+        jobTrackTotal = 1
+        patchProgress({
+          trackDone: 0,
+          trackTotal: 1,
+          songKey: music.id,
+          downloaded: 0,
+          byteTotal: null,
         })
-      } finally {
-        progress = null
-      }
 
-      const row: DownloadRow = {
-        song_key: musicInfo.id,
-        file_path: destPath,
-        quality: actualQuality,
-        playlist_id: null,
-        source_kind: sourceKind,
-        completed_at: Date.now(),
+        const existing = repos.downloads.get(music.id)
+        if (existing && existsSync(existing.file_path)) {
+          counters.scanned = 1
+          counters.skipped = 1
+          bumpJob(jobRow.id, counters)
+          jobTrackDone = 1
+          bumpTrackProgress(1)
+          const row = { ...existing, ...meta }
+          repos.downloads.upsert(row)
+          result = { ...row, alreadyHad: true }
+          return 'success'
+        }
+
+        if (!sourceStatus.ok) {
+          counters.scanned = 1
+          counters.failed = 1
+          counters.errors.push({ song_key: music.id, message: '源不可用' })
+          bumpJob(jobRow.id, counters)
+          throw new Error('源不可用')
+        }
+
+        const wanted = (settings.quality || '320k') as Quality
+        const sourceKey = String(music.source)
+        const sourceQualities = (sourceStatus.sources[sourceKey]?.qualitys ?? []) as Quality[]
+        const quality = pickQuality(
+          wanted,
+          sourceQualities.length ? sourceQualities : [wanted],
+          songQualitiesOf(music),
+        )
+
+        try {
+          const { url, type } = await deps.getMusicUrl(sourceKey, music, quality)
+          const actualQuality = type || quality
+          const fileName = buildFileName(settings, music.name, music.singer, actualQuality)
+          const destPath = join(savePath, saveDir, fileName)
+
+          if (!existing && existsSync(destPath) && statSync(destPath).size > 100) {
+            const row: DownloadRow = {
+              song_key: music.id,
+              file_path: destPath,
+              quality: actualQuality,
+              playlist_id: null,
+              source_kind: sourceKind,
+              completed_at: Date.now(),
+              ...meta,
+            }
+            repos.downloads.upsert(row)
+            counters.scanned = 1
+            counters.skipped = 1
+            bumpJob(jobRow.id, counters)
+            jobTrackDone = 1
+            bumpTrackProgress(1)
+            result = { ...row, alreadyHad: true }
+            return 'success'
+          }
+
+          mkdirSync(dirname(destPath), { recursive: true })
+          patchProgress({
+            songKey: music.id,
+            downloaded: 0,
+            byteTotal: null,
+            trackDone: 0,
+            trackTotal: 1,
+          })
+          await deps.downloadFile({
+            url,
+            destPath,
+            onProgress: p => {
+              patchProgress({
+                songKey: music.id,
+                downloaded: p.downloaded,
+                byteTotal: p.total,
+                trackDone: 0,
+                trackTotal: 1,
+              })
+            },
+          })
+
+          const row: DownloadRow = {
+            song_key: music.id,
+            file_path: destPath,
+            quality: actualQuality,
+            playlist_id: null,
+            source_kind: sourceKind,
+            completed_at: Date.now(),
+            ...meta,
+          }
+          repos.downloads.upsert(row)
+          counters.scanned = 1
+          counters.downloaded = 1
+          bumpJob(jobRow.id, counters)
+          jobTrackDone = 1
+          bumpTrackProgress(1)
+          result = row
+          return 'success'
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          counters.scanned = 1
+          counters.failed = 1
+          counters.errors.push({ song_key: music.id, message })
+          bumpJob(jobRow.id, counters)
+          throw err
+        }
+      })
+
+      if (job.status === 'failed' || !result) {
+        let message = '下载失败'
+        try {
+          const errors = job.error_summary ? (JSON.parse(job.error_summary) as { message?: string }[]) : []
+          if (errors[0]?.message) message = errors[0].message
+        } catch {
+          /* keep */
+        }
+        throw new Error(message)
       }
-      repos.downloads.upsert(row)
-      return row
+      return result
     },
 
     getRunningProgress(): SyncProgress | null {

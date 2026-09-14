@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Hono } from 'hono'
 import type { createRepos, DownloadRow, JobRow, PlaylistRow } from '../db/repos.js'
+import { coverFromPlaylistUrl } from '../db/index.js'
 import type { MusicInfo, OnlineSource } from '../types.js'
 import type { SourceStatus } from '../userApi/runtime.js'
 import type { SyncProgress } from '../services/sync.js'
@@ -20,6 +21,9 @@ export type AppCtx = {
     syncAll(): Promise<JobRow>
     downloadSearch(musicInfo: MusicInfo): Promise<DownloadRow>
     getRunningProgress(): SyncProgress | null
+  }
+  playlists: {
+    refreshPlaylistSnapshot(playlistId: number): Promise<PlaylistRow>
   }
   search: {
     searchMusic(
@@ -79,7 +83,7 @@ async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<R
 
 export function createApp(ctx: AppCtx): Hono {
   const app = new Hono()
-  const { repos, sync, search, runtime, dataDir } = ctx
+  const { repos, sync, search, runtime, dataDir, playlists } = ctx
   const settings = createSettingsService({
     repos,
     runtime,
@@ -90,10 +94,29 @@ export function createApp(ctx: AppCtx): Hono {
     const downloadKeys = new Set(repos.downloads.list().map(d => d.song_key))
     const list = repos.playlists.list().map(p => {
       const tracks = repos.tracks.list(p.id)
+      let coverUrl = String(p.cover_url || '')
+      if (!coverUrl) {
+        for (const t of tracks) {
+          try {
+            const music = JSON.parse(t.raw || '{}') as MusicInfo
+            const pic = String(music.meta?.picUrl || '')
+            if (pic && pic !== 'null') {
+              coverUrl = pic
+              break
+            }
+          } catch {
+            /* next */
+          }
+        }
+      }
+      if (!coverUrl) {
+        coverUrl = coverFromPlaylistUrl(p.url)
+      }
       return {
         ...p,
         trackCount: tracks.length,
         downloaded: tracks.filter(t => downloadKeys.has(t.song_key)).length,
+        coverUrl,
       }
     })
     return c.json({ list })
@@ -108,6 +131,21 @@ export function createApp(ctx: AppCtx): Hono {
     }
     const row = repos.playlists.insert({ source: source as OnlineSource, url })
     return c.json(row)
+  })
+
+  app.post('/api/playlists/:id/refresh', async c => {
+    const id = Number(c.req.param('id'))
+    if (!Number.isFinite(id) || !repos.playlists.get(id)) {
+      return c.json({ error: 'not found' }, 404)
+    }
+    try {
+      const row = await playlists.refreshPlaylistSnapshot(id)
+      const tracks = repos.tracks.list(id)
+      return c.json({ playlist: row, trackCount: tracks.length })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, 500)
+    }
   })
 
   app.patch('/api/playlists/:id', async c => {
@@ -198,6 +236,85 @@ export function createApp(ctx: AppCtx): Hono {
     return c.json({ list: repos.downloads.list() })
   })
 
+  app.post('/api/downloads/backfill-covers', async c => {
+    const { ensureMusicPic } = await import('../services/pic.js')
+    const rows = repos.downloads.list().filter(r => !r.pic_url)
+    let updated = 0
+    for (const row of rows) {
+      let musicInfo: MusicInfo | null = null
+      try {
+        musicInfo = JSON.parse(row.raw || '{}') as MusicInfo
+      } catch {
+        musicInfo = null
+      }
+      if (!musicInfo?.id) {
+        musicInfo = {
+          id: row.song_key,
+          name: row.name || row.song_key,
+          singer: row.singer || '',
+          source: (row.source || 'wy') as MusicInfo['source'],
+          interval: null,
+          meta: {},
+        }
+      }
+      try {
+        const enriched = await ensureMusicPic(musicInfo)
+        const picUrl = String(enriched.meta?.picUrl || '')
+        if (!picUrl) continue
+        repos.downloads.upsert({
+          ...row,
+          name: row.name || enriched.name,
+          singer: row.singer || enriched.singer,
+          source: row.source || String(enriched.source),
+          pic_url: picUrl,
+          raw: JSON.stringify(enriched),
+        })
+        updated++
+      } catch {
+        /* skip one */
+      }
+    }
+    return c.json({ updated, scanned: rows.length })
+  })
+
+  app.get('/api/lyrics', async c => {
+    const songKey = c.req.query('songKey')
+    if (!songKey) return c.json({ error: 'songKey required' }, 400)
+    const row = repos.downloads.get(songKey)
+    if (!row) return c.json({ error: 'not found' }, 404)
+    let musicInfo: MusicInfo | null = null
+    try {
+      musicInfo = JSON.parse(row.raw || '{}') as MusicInfo
+    } catch {
+      musicInfo = null
+    }
+    if (!musicInfo?.id) {
+      musicInfo = {
+        id: row.song_key,
+        name: row.name || row.song_key,
+        singer: row.singer || '',
+        source: (row.source || 'wy') as MusicInfo['source'],
+        interval: null,
+        meta: { picUrl: row.pic_url },
+      }
+    }
+    try {
+      const { getLyricForMusic } = await import('../services/lyrics.js')
+      const lyric = await getLyricForMusic(musicInfo)
+      return c.json({
+        songKey,
+        name: row.name || musicInfo.name,
+        singer: row.singer || musicInfo.singer,
+        source: row.source || musicInfo.source,
+        picUrl: row.pic_url || String(musicInfo.meta?.picUrl || ''),
+        ...lyric,
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, 500)
+    }
+  })
+
   app.get('/api/source/status', c => {
     return c.json(runtime.getStatus())
   })
@@ -224,6 +341,53 @@ export function createApp(ctx: AppCtx): Hono {
     const status = await runtime.load(script)
     applyProxyFromSettings(repos, runtime)
     return c.json(status)
+  })
+
+  app.post('/api/settings/user-api/url', async c => {
+    const body = await readJson(c)
+    const rawUrl = typeof body.url === 'string' ? body.url.trim() : ''
+    if (!rawUrl) {
+      return c.json({ error: 'url required' }, 400)
+    }
+    let parsed: URL
+    try {
+      parsed = new URL(rawUrl)
+    } catch {
+      return c.json({ error: 'invalid url' }, 400)
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return c.json({ error: 'only http(s) urls are allowed' }, 400)
+    }
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 30_000)
+      let res: Response
+      try {
+        res = await fetch(parsed.toString(), {
+          signal: controller.signal,
+          redirect: 'follow',
+          headers: { Accept: 'text/plain, application/javascript, */*' },
+        })
+      } finally {
+        clearTimeout(timer)
+      }
+      if (!res.ok) {
+        return c.json({ error: `download failed: ${res.status}` }, 400)
+      }
+      const script = await res.text()
+      if (!script.trim()) {
+        return c.json({ error: 'empty script' }, 400)
+      }
+      const dir = join(dataDir, 'user-api')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'current.js'), script, 'utf8')
+      const status = await runtime.load(script)
+      applyProxyFromSettings(repos, runtime)
+      return c.json(status)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, 400)
+    }
   })
 
   return app

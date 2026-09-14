@@ -19,6 +19,30 @@ export type CronSettings = {
   scheduleOn?: string
   schedule?: string
   cron?: string
+  /** HH:mm for daily schedule; default 03:00 */
+  scheduleTime?: string
+}
+
+export function parseScheduleTime(raw: string | undefined): { hour: number; minute: number } {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(raw ?? '').trim())
+  if (!m) return { hour: 3, minute: 0 }
+  const hour = Number(m[1])
+  const minute = Number(m[2])
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return { hour: 3, minute: 0 }
+  }
+  return { hour, minute }
+}
+
+export function resolveCronExpression(settings: CronSettings): string {
+  if (settings.schedule === 'every-6h') return '0 */6 * * *'
+  if (settings.schedule === 'daily') {
+    const { hour, minute } = parseScheduleTime(settings.scheduleTime)
+    return `${minute} ${hour} * * *`
+  }
+  if (settings.schedule === 'cron' && settings.cron?.trim()) return settings.cron.trim()
+  if (settings.cron?.trim()) return settings.cron.trim()
+  return '0 */6 * * *'
 }
 
 export type CronDeps = {
@@ -30,14 +54,6 @@ export type CronDeps = {
 export type CronHandle = {
   stop: () => void
   reschedule: () => void
-}
-
-export function resolveCronExpression(settings: CronSettings): string {
-  if (settings.schedule === 'every-6h') return '0 */6 * * *'
-  if (settings.schedule === 'daily') return '0 3 * * *'
-  if (settings.schedule === 'cron' && settings.cron?.trim()) return settings.cron.trim()
-  if (settings.cron?.trim()) return settings.cron.trim()
-  return '0 */6 * * *'
 }
 
 /** Injectable cron scheduler for tests and serve. Default schedule is OFF. */
@@ -100,6 +116,9 @@ export async function createAppContext(config?: AppConfig): Promise<AppCtx> {
     dataDir,
     repos,
     sync,
+    playlists: {
+      refreshPlaylistSnapshot: id => playlists.refreshPlaylistSnapshot(id),
+    },
     search,
     runtime: {
       load: script => runtime.load(script),
@@ -147,7 +166,7 @@ export async function startServe(opts: ServeOptions = {}): Promise<void> {
     app.get('*', serveStatic({ path: './web/dist/index.html' }))
   }
 
-  honoServe(
+  const server = honoServe(
     {
       fetch: app.fetch,
       hostname: config.host,
@@ -157,4 +176,15 @@ export async function startServe(opts: ServeOptions = {}): Promise<void> {
       console.log(`lx-sync listening on http://${config.host}:${info.port}`)
     },
   )
+
+  // Keep the CLI process alive until the HTTP server closes (SIGINT/SIGTERM).
+  await new Promise<void>((resolve, reject) => {
+    const shutdown = () => {
+      cronHandle?.stop()
+      server.close(err => (err ? reject(err) : resolve()))
+    }
+    process.once('SIGINT', shutdown)
+    process.once('SIGTERM', shutdown)
+    server.once('error', reject)
+  })
 }

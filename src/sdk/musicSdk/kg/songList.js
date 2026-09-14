@@ -1,7 +1,11 @@
+import { createRequire } from 'node:module'
 import { httpFetch } from '../../request.ts'
 import { decodeName, formatPlayTime, sizeFormate, dateFormat, formatPlayCount } from '../../common.ts'
-import infSign from './vendors/infSign.min.js'
 import { signatureParams } from './util.js'
+
+// UMD/CJS vendor; package is "type":"module", so load via createRequire + .cjs
+const require = createRequire(import.meta.url)
+const infSign = require('./vendors/infSign.min.cjs')
 
 const handleSignature = (id, page, limit) => new Promise((resolve, reject) => {
   infSign({ appid: 1058, type: 0, module: 'playlist', page, pagesize: limit, specialid: id }, null, {

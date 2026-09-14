@@ -44,4 +44,45 @@ describe('playlists and downloads', () => {
     expect(updated.name_custom).toBe(1)
     expect(updated.name).toBe('本地名')
   })
+
+  it('backfills download cover meta from playlist_tracks', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'tg-')), 't.db')
+    const db = openDb(file)
+    const repos = createRepos(db)
+    const p = repos.playlists.insert({ source: 'wy', url: 'https://music.163.com/playlist?id=1' })
+    repos.tracks.replaceAll(p.id, [
+      {
+        playlist_id: p.id,
+        song_key: 'wy_99',
+        name: '封面歌',
+        singer: '歌手',
+        album: '专',
+        qualitys: '[]',
+        raw: JSON.stringify({
+          id: 'wy_99',
+          name: '封面歌',
+          singer: '歌手',
+          source: 'wy',
+          interval: null,
+          meta: { picUrl: 'https://example.com/cover.jpg' },
+        }),
+      },
+    ])
+    repos.downloads.upsert({
+      song_key: 'wy_99',
+      file_path: '/tmp/cover.mp3',
+      quality: '320k',
+      playlist_id: p.id,
+      source_kind: 'playlist',
+      completed_at: Date.now(),
+    })
+    db.close()
+
+    const db2 = openDb(file)
+    const repos2 = createRepos(db2)
+    const row = repos2.downloads.get('wy_99')
+    expect(row?.name).toBe('封面歌')
+    expect(row?.source).toBe('wy')
+    expect(row?.pic_url).toBe('https://example.com/cover.jpg')
+  })
 })

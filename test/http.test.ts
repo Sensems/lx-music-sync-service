@@ -64,6 +64,11 @@ function makeTestCtx(): AppCtx {
         return null
       },
     },
+    playlists: {
+      async refreshPlaylistSnapshot(playlistId: number) {
+        return repos.playlists.get(playlistId)!
+      },
+    },
     search: {
       async searchMusic(_source, q, _page) {
         return {

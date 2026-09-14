@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS playlists (
   name_custom INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1,
   save_dir TEXT NOT NULL DEFAULT '',
+  cover_url TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -29,7 +30,12 @@ CREATE TABLE IF NOT EXISTS downloads (
   quality TEXT NOT NULL,
   playlist_id INTEGER,
   source_kind TEXT NOT NULL CHECK (source_kind IN ('playlist', 'search')),
-  completed_at INTEGER NOT NULL
+  completed_at INTEGER NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  singer TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  pic_url TEXT NOT NULL DEFAULT '',
+  raw TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS sync_jobs (

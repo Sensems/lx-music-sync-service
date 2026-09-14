@@ -9,6 +9,7 @@ export type PlaylistRow = {
   name_custom: number
   enabled: number
   save_dir: string
+  cover_url: string
   created_at: number
   updated_at: number
 }
@@ -30,6 +31,11 @@ export type DownloadRow = {
   playlist_id: number | null
   source_kind: 'playlist' | 'search'
   completed_at: number
+  name?: string
+  singer?: string
+  source?: string
+  pic_url?: string
+  raw?: string
 }
 
 export type JobStatus = 'running' | 'success' | 'failed' | 'skipped'
@@ -57,6 +63,7 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   quality: '320k',
   scheduleOn: '0',
   schedule: 'every-6h',
+  scheduleTime: '03:00',
   cron: '0 */6 * * *',
   concurrency: '3',
   fileName: 'name-singer',
@@ -66,7 +73,18 @@ const DEFAULT_SETTINGS: Record<string, string> = {
 }
 
 function rowToPlaylist(row: Record<string, unknown>): PlaylistRow {
-  return row as unknown as PlaylistRow
+  return {
+    id: Number(row.id),
+    source: row.source as OnlineSource,
+    url: String(row.url ?? ''),
+    name: String(row.name ?? ''),
+    name_custom: Number(row.name_custom ?? 0),
+    enabled: Number(row.enabled ?? 1),
+    save_dir: String(row.save_dir ?? ''),
+    cover_url: String(row.cover_url ?? ''),
+    created_at: Number(row.created_at ?? 0),
+    updated_at: Number(row.updated_at ?? 0),
+  }
 }
 
 function rowToTrack(row: Record<string, unknown>): TrackRow {
@@ -76,9 +94,18 @@ function rowToTrack(row: Record<string, unknown>): TrackRow {
 function rowToDownload(row: Record<string, unknown>): DownloadRow {
   const r = row as Record<string, unknown>
   return {
-    ...r,
+    song_key: String(r.song_key),
+    file_path: String(r.file_path),
+    quality: r.quality as Quality,
     playlist_id: r.playlist_id == null ? null : Number(r.playlist_id),
-  } as DownloadRow
+    source_kind: r.source_kind as DownloadRow['source_kind'],
+    completed_at: Number(r.completed_at),
+    name: String(r.name ?? ''),
+    singer: String(r.singer ?? ''),
+    source: String(r.source ?? ''),
+    pic_url: String(r.pic_url ?? ''),
+    raw: String(r.raw ?? '{}'),
+  }
 }
 
 function rowToJob(row: Record<string, unknown>): JobRow {
@@ -138,8 +165,11 @@ export function createRepos(db: Database.Database) {
       return rowToPlaylist(row as Record<string, unknown>)
     },
 
-    /** Update name/save_dir after snapshot refresh without flipping name_custom. */
-    updateAfterRefresh(id: number, partial: { name?: string; save_dir?: string }): PlaylistRow {
+    /** Update name/save_dir/cover after snapshot refresh without flipping name_custom. */
+    updateAfterRefresh(
+      id: number,
+      partial: { name?: string; save_dir?: string; cover_url?: string },
+    ): PlaylistRow {
       const existing = db.prepare('SELECT * FROM playlists WHERE id = ?').get(id) as Record<string, unknown> | undefined
       if (!existing) {
         throw new Error(`playlist not found: ${id}`)
@@ -147,9 +177,11 @@ export function createRepos(db: Database.Database) {
       const now = Date.now()
       const name = partial.name !== undefined ? partial.name : (existing.name as string)
       const save_dir = partial.save_dir !== undefined ? partial.save_dir : (existing.save_dir as string)
+      const cover_url =
+        partial.cover_url !== undefined ? partial.cover_url : String(existing.cover_url ?? '')
       db.prepare(
-        `UPDATE playlists SET name = @name, save_dir = @save_dir, updated_at = @updated_at WHERE id = @id`,
-      ).run({ id, name, save_dir, updated_at: now })
+        `UPDATE playlists SET name = @name, save_dir = @save_dir, cover_url = @cover_url, updated_at = @updated_at WHERE id = @id`,
+      ).run({ id, name, save_dir, cover_url, updated_at: now })
       const row = db.prepare('SELECT * FROM playlists WHERE id = ?').get(id)
       return rowToPlaylist(row as Record<string, unknown>)
     },
@@ -200,15 +232,27 @@ export function createRepos(db: Database.Database) {
 
     upsert(row: DownloadRow): void {
       db.prepare(
-        `INSERT INTO downloads (song_key, file_path, quality, playlist_id, source_kind, completed_at)
-         VALUES (@song_key, @file_path, @quality, @playlist_id, @source_kind, @completed_at)
+        `INSERT INTO downloads (song_key, file_path, quality, playlist_id, source_kind, completed_at, name, singer, source, pic_url, raw)
+         VALUES (@song_key, @file_path, @quality, @playlist_id, @source_kind, @completed_at, @name, @singer, @source, @pic_url, @raw)
          ON CONFLICT(song_key) DO UPDATE SET
            file_path = excluded.file_path,
            quality = excluded.quality,
            playlist_id = excluded.playlist_id,
            source_kind = excluded.source_kind,
-           completed_at = excluded.completed_at`,
-      ).run(row)
+           completed_at = excluded.completed_at,
+           name = excluded.name,
+           singer = excluded.singer,
+           source = excluded.source,
+           pic_url = excluded.pic_url,
+           raw = excluded.raw`,
+      ).run({
+        ...row,
+        name: row.name ?? '',
+        singer: row.singer ?? '',
+        source: row.source ?? '',
+        pic_url: row.pic_url ?? '',
+        raw: row.raw ?? '{}',
+      })
     },
   }
 

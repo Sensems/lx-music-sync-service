@@ -1,12 +1,18 @@
 :root {
-  --cabinet: #241814;
-  --wine: #4a1f2a;
-  --foil: #d4a574;
+  --cabinet: #322824;
+  --wine: #5c2a36;
+  --foil: #d8ae7e;
   --tungsten: #e8b84a;
-  --rec: #c23b22;
-  --paper: #f2e6d0;
+  --rec: #d14a32;
+  --fg: #f6ecdc;
+  --paper: #f6ecdc;
+  --card: #f4ead8;
   --ink: #1c120c;
-  --mute: #8a7464;
+  --mute: #a08b7a;
+  --surface: #40332c;
+  --border: #6e5648;
+  --elevated: #4a3b33;
+  --glow: #5c2a3633;
 }
 
 html,
@@ -15,7 +21,7 @@ body,
   min-height: 100%;
   margin: 0;
   background: var(--cabinet);
-  color: var(--paper);
+  color: var(--fg);
   font-family: 'Noto Sans SC', 'Source Han Sans SC', sans-serif;
   font-size: 16px;
   line-height: 1.5;
@@ -23,13 +29,52 @@ body,
 
 body {
   background-image:
-    radial-gradient(1200px 500px at 10% -10%, #4a1f2a33, transparent 55%),
-    radial-gradient(800px 400px at 110% 0%, #d4a57414, transparent 50%);
+    radial-gradient(1200px 500px at 10% -10%, var(--glow), transparent 55%),
+    radial-gradient(800px 400px at 110% 0%, color-mix(in srgb, var(--foil) 12%, transparent), transparent 50%);
+  transition:
+    background-color 0.25s ease,
+    color 0.25s ease;
 }
 
 :focus-visible {
   outline: 2px solid var(--foil);
   outline-offset: 3px;
+}
+
+/* Scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--foil) 70%, var(--border)) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--foil) 55%, var(--border));
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--foil);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+html {
+  scrollbar-gutter: stable;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -47,5 +92,125 @@ body {
 }
 
 .ant-modal-content {
-  border: 1px solid #5a3f32;
+  border: 1px solid var(--border);
+}
+
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition:
+    opacity 0.28s ease,
+    transform 0.28s ease;
+}
+
+.page-fade-enter-from {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.page-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+.stamp {
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.stamp:hover {
+  transform: translateY(-1px);
+}
+
+.stamp:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+.cabinet-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  transition:
+    border-color 0.25s ease,
+    box-shadow 0.25s ease,
+    background-color 0.25s ease;
+}
+
+.cabinet-card:hover {
+  border-color: var(--foil);
+  box-shadow: 0 8px 28px color-mix(in srgb, #000 20%, transparent);
+}
+
+.schedule-time {
+  color-scheme: dark;
+  border-radius: 2px;
+  background: var(--cabinet);
+  border: 1px solid var(--border);
+  color: var(--fg);
+}
+
+html[data-theme-mode='light'] .schedule-time {
+  color-scheme: light;
+}
+
+.sync-ribbon__bar {
+  transition: width 0.35s ease;
+}
+
+.stagger-in > * {
+  animation: rise-in 0.38s ease both;
+}
+
+.stagger-in > *:nth-child(1) {
+  animation-delay: 0.02s;
+}
+.stagger-in > *:nth-child(2) {
+  animation-delay: 0.05s;
+}
+.stagger-in > *:nth-child(3) {
+  animation-delay: 0.08s;
+}
+.stagger-in > *:nth-child(4) {
+  animation-delay: 0.11s;
+}
+.stagger-in > *:nth-child(5) {
+  animation-delay: 0.14s;
+}
+.stagger-in > *:nth-child(6) {
+  animation-delay: 0.17s;
+}
+.stagger-in > *:nth-child(7) {
+  animation-delay: 0.2s;
+}
+.stagger-in > *:nth-child(8) {
+  animation-delay: 0.23s;
+}
+.stagger-in > *:nth-child(n + 9) {
+  animation-delay: 0.26s;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.nav-hit {
+  transition:
+    transform 0.15s ease,
+    background-color 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.nav-hit:hover {
+  transform: translateY(-1px);
+}
+
+.page-panel {
+  color: var(--fg);
 }

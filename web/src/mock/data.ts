@@ -9,6 +9,7 @@ export interface Playlist {
   trackCount: number
   downloaded: number
   spine: string
+  coverUrl?: string
 }
 
 export interface Track {
@@ -24,6 +25,8 @@ export interface SearchHit {
   name: string
   singer: string
   source: SourceId
+  interval?: number | null
+  meta?: Record<string, unknown>
 }
 
 export interface JobLine {
@@ -71,8 +74,8 @@ export const searchHits: SearchHit[] = [
 ]
 
 export const jobLines: JobLine[] = [
-  { id: 'j1', title: '压盘中 · 深夜通勤', detail: '起风了 — 买辣椒也用券  12.4 / 18.1 MB', kind: 'run' },
-  { id: 'j2', title: '跳过', detail: '理想三旬 已在磁盘 wy_297322', kind: 'skip' },
+  { id: 'j1', title: '同步中 · 深夜通勤', detail: '起风了 — 买辣椒也用券  12.4 / 18.1 MB', kind: 'run' },
+  { id: 'j2', title: '跳过', detail: '理想三旬 已在本地 wy_297322', kind: 'skip' },
   { id: 'j3', title: '完成', detail: '夜空中最亮的星 写入 深夜通勤/', kind: 'done' },
-  { id: 'j4', title: '失败', detail: '南方姑娘 源未返回地址，下一轮再试', kind: 'fail' },
+  { id: 'j4', title: '失败', detail: '南方姑娘 音源未返回地址，下一轮再试', kind: 'fail' },
 ]
