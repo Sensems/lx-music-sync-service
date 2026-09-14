@@ -1,4 +1,15 @@
+# 复制成 config.yaml 后按需修改（config.yaml 已被 .gitignore 忽略）。
+# 也可以用环境变量指定别的路径：TINGGUI_CONFIG=/etc/lx-sync.yaml
+
+# 监听地址。默认 127.0.0.1 只有本机能访问，适合配合 nginx 反向代理；
+# 想直接暴露到公网就改成 0.0.0.0 —— 但本服务没有登录鉴权，请自行评估风险。
 host: 127.0.0.1
+
 port: 8787
+
+# 数据目录（SQLite 库、下载的音乐、音源脚本都放这里）。
+# 相对路径按启动时的工作目录解析，所以要在仓库根目录启动。
 dataDir: ./data
+
+# 日志级别：debug | info | warn | error
 logLevel: info

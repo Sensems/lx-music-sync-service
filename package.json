@@ -8,8 +8,10 @@
   },
   "scripts": {
     "test": "vitest run",
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc"
+    "dev": "tsx watch src/cli.ts serve",
+    "build": "tsc",
+    "build:web": "npm --prefix web install && npm --prefix web run build",
+    "start": "node bin/lx-sync.mjs serve"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",

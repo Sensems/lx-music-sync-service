@@ -1,16 +1,15 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { register } from 'tsx/esm/api'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const tsxCli = join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs')
-const entry = join(root, 'src', 'cli.ts')
 
-const result = spawnSync(process.execPath, [tsxCli, entry, ...process.argv.slice(2)], {
-  stdio: 'inherit',
-  cwd: root,
-  env: process.env,
-})
+// 在同一个进程里运行 TypeScript，而不是 spawn 子进程：这样 PM2 / systemd
+// 发来的 SIGINT、SIGTERM 才能真正关掉 HTTP 服务，否则重启后会留下占着端口的孤儿进程。
+process.chdir(root)
+register()
 
-process.exit(typeof result.status === 'number' ? result.status : 1)
+const { createDefaultCliDeps, runCli } = await import(pathToFileURL(join(root, 'src', 'cli.ts')).href)
+const code = await runCli(process.argv.slice(2), await createDefaultCliDeps())
+process.exit(code)
