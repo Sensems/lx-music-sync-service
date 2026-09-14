@@ -1,0 +1,51 @@
+:root {
+  --cabinet: #241814;
+  --wine: #4a1f2a;
+  --foil: #d4a574;
+  --tungsten: #e8b84a;
+  --rec: #c23b22;
+  --paper: #f2e6d0;
+  --ink: #1c120c;
+  --mute: #8a7464;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+  margin: 0;
+  background: var(--cabinet);
+  color: var(--paper);
+  font-family: 'Noto Sans SC', 'Source Han Sans SC', sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+body {
+  background-image:
+    radial-gradient(1200px 500px at 10% -10%, #4a1f2a33, transparent 55%),
+    radial-gradient(800px 400px at 110% 0%, #d4a57414, transparent 50%);
+}
+
+:focus-visible {
+  outline: 2px solid var(--foil);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.ant-btn-primary {
+  color: var(--ink) !important;
+}
+
+.ant-modal-content {
+  border: 1px solid #5a3f32;
+}
