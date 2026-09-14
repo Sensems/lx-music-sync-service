@@ -2,7 +2,9 @@ import { createCipheriv, createHash, constants, publicEncrypt, randomBytes } fro
 import vm from 'node:vm'
 import zlib from 'node:zlib'
 import needle from 'needle'
+import { httpOverHttp, httpsOverHttp } from 'tunnel'
 import type { MusicInfo, Quality } from '../types.js'
+import { getSdkProxy, setSdkProxy, type SdkProxy } from '../sdk/proxy.js'
 import { parseScriptInfo } from './parseScript.js'
 
 export type SourceStatus = {
@@ -128,6 +130,13 @@ type LxRequestOptions = {
 
 type AbortableRequest = { aborted?: boolean; abort: () => void }
 
+const getRequestAgent = (url: string) => {
+  const proxy = getSdkProxy()
+  if (!proxy) return undefined
+  const options = { proxy: { host: proxy.host, port: proxy.port } }
+  return /^https:/.test(url) ? httpsOverHttp(options) : httpOverHttp(options)
+}
+
 const lxRequest = (
   url: string,
   { method = 'get', timeout, headers, body, form, formData }: LxRequestOptions = {},
@@ -145,6 +154,7 @@ const lxRequest = (
     options.json = false
   }
   options.response_timeout = typeof timeout == 'number' && timeout > 0 ? Math.min(timeout, 60_000) : 60_000
+  options.agent = getRequestAgent(url)
 
   const stream = needle.request(
     method as needle.NeedleHttpVerbs,
@@ -186,22 +196,38 @@ const lxRequest = (
   }
 }
 
+const emptyStatus = (): SourceStatus => ({
+  ok: false,
+  message: 'not loaded',
+  sources: {},
+})
+
 export function createUserApiRuntime(): {
   load(script: string): Promise<SourceStatus>
   getMusicUrl(source: string, musicInfo: MusicInfo, quality: Quality): Promise<{ type: Quality; url: string }>
+  getStatus(): SourceStatus
+  setProxy(proxy: SdkProxy | null): void
   dispose(): void
 } {
   let requestHandler: RequestHandler | null = null
   let disposed = false
+  let lastStatus: SourceStatus = emptyStatus()
 
   const dispose = () => {
     disposed = true
     requestHandler = null
   }
 
+  const getStatus = () => lastStatus
+
+  const setProxy = (proxy: SdkProxy | null) => {
+    setSdkProxy(proxy)
+  }
+
   const load = async (script: string): Promise<SourceStatus> => {
     if (disposed) throw new Error('Runtime disposed')
     requestHandler = null
+    lastStatus = emptyStatus()
 
     let scriptInfo: ReturnType<typeof parseScriptInfo>
     try {
@@ -320,7 +346,8 @@ export function createUserApiRuntime(): {
       })
     }
 
-    return statusPromise
+    lastStatus = await statusPromise
+    return lastStatus
   }
 
   const getMusicUrl = async (
@@ -350,5 +377,5 @@ export function createUserApiRuntime(): {
     return { type: quality, url: response }
   }
 
-  return { load, getMusicUrl, dispose }
+  return { load, getMusicUrl, getStatus, setProxy, dispose }
 }

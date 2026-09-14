@@ -191,6 +191,13 @@ export function createRepos(db: Database.Database) {
       return row ? rowToDownload(row) : undefined
     },
 
+    list(): DownloadRow[] {
+      const rows = db
+        .prepare('SELECT * FROM downloads ORDER BY completed_at DESC')
+        .all() as Record<string, unknown>[]
+      return rows.map(rowToDownload)
+    },
+
     upsert(row: DownloadRow): void {
       db.prepare(
         `INSERT INTO downloads (song_key, file_path, quality, playlist_id, source_kind, completed_at)
@@ -252,6 +259,13 @@ export function createRepos(db: Database.Database) {
       ).run(merged)
       const row = db.prepare('SELECT * FROM sync_jobs WHERE id = ?').get(partial.id)
       return rowToJob(row as Record<string, unknown>)
+    },
+
+    list(): JobRow[] {
+      const rows = db
+        .prepare('SELECT * FROM sync_jobs ORDER BY id DESC')
+        .all() as Record<string, unknown>[]
+      return rows.map(rowToJob)
     },
   }
 
