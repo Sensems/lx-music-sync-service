@@ -554,17 +554,16 @@ onUnmounted(() => {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: 45px;
+  bottom: var(--ribbon-h);
   z-index: 34;
   display: grid;
   grid-template-columns: minmax(12rem, 1fr) minmax(18rem, 1.5fr) minmax(9rem, 1fr);
   align-items: center;
   gap: 0.75rem;
   min-height: 4.5rem;
-  padding: 0.45rem 1rem;
+  padding: 0.45rem max(1rem, var(--safe-r)) 0.45rem max(1rem, var(--safe-l));
   background: var(--surface);
   border-top: 1px solid var(--border);
-  padding-bottom: calc(0.45rem + env(safe-area-inset-bottom, 0));
 }
 
 .player-bar__left {
@@ -865,7 +864,7 @@ html[data-theme-mode='light'] .player-bar__badge {
   top: 0;
   left: 0;
   right: 0;
-  bottom: calc(45px + 4.5rem);
+  bottom: var(--chrome-bottom);
   z-index: 31;
   display: flex;
   flex-direction: column;
@@ -1033,7 +1032,8 @@ html[data-theme-mode='light'] .player-bar__badge {
 .player-queue {
   position: fixed;
   right: 0.75rem;
-  bottom: calc(45px + 4.5rem + 0.5rem);
+  bottom: calc(var(--chrome-bottom) + 0.5rem);
+  overscroll-behavior: contain;
   z-index: 36;
   width: min(22rem, calc(100vw - 1.5rem));
   height: min(26rem, 58vh);
@@ -1355,8 +1355,23 @@ html[data-theme-mode='light'] .player-bar__badge {
       'seek seek'
       'left right';
     gap: 0.15rem 0.5rem;
-    min-height: 4.75rem;
-    padding: 0.3rem 0.7rem 0.4rem;
+    min-height: 4.7rem;
+    padding: 0.3rem max(0.7rem, var(--safe-r)) 0.35rem max(0.7rem, var(--safe-l));
+  }
+
+  .player-bar__vol {
+    display: none;
+  }
+
+  .player-groove::-webkit-slider-thumb {
+    width: 16px;
+    height: 16px;
+    opacity: 1;
+  }
+
+  .player-now__lyrics,
+  .player-queue__list {
+    overscroll-behavior: contain;
   }
 
   .player-bar__center {
@@ -1386,9 +1401,17 @@ html[data-theme-mode='light'] .player-bar__badge {
 
   .player-now__body {
     flex-direction: column;
-    gap: 1rem;
-    padding: 0.5rem 1.25rem 1rem;
+    gap: 0.65rem;
+    padding: 0.35rem 1rem 0.75rem;
     align-items: center;
+  }
+
+  .player-now__disc {
+    flex: 0 0 auto;
+  }
+
+  .player-now__title {
+    font-size: 1.2rem;
   }
 
   .player-bar__seek {
@@ -1396,7 +1419,7 @@ html[data-theme-mode='light'] .player-bar__badge {
   }
 
   .player-now {
-    bottom: calc(45px + 4.75rem);
+    bottom: var(--chrome-bottom);
   }
 
   .player-now__modes {
@@ -1414,7 +1437,7 @@ html[data-theme-mode='light'] .player-bar__badge {
     right: 0.4rem;
     left: 0.4rem;
     width: auto;
-    bottom: calc(45px + 4.75rem + 0.4rem);
+    bottom: calc(var(--chrome-bottom) + 0.4rem);
   }
 
   .player-car__body {

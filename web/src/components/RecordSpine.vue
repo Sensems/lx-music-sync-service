@@ -16,7 +16,7 @@ const emit = defineEmits<{
 <template>
   <button
     type="button"
-    class="group relative h-72 w-14 md:h-80 md:w-16 shrink-0 overflow-hidden"
+    class="group relative h-52 w-12 sm:h-72 sm:w-14 md:h-80 md:w-16 shrink-0 overflow-hidden"
     :class="
       insert
         ? 'border border-dashed border-foil text-foil bg-surface/50 hover:bg-surface'
@@ -42,7 +42,7 @@ const emit = defineEmits<{
     >
       <SourceIcon :source="playlist.source" :size="14" />
       <span
-        class="font-display text-lg writing-vertical-rl [text-orientation:upright] max-h-48 overflow-hidden drop-shadow"
+        class="font-display text-base sm:text-lg writing-vertical-rl [text-orientation:upright] max-h-32 sm:max-h-48 overflow-hidden drop-shadow"
       >{{ playlist.name }}</span>
       <span class="font-mono text-[10px] drop-shadow">{{ playlist.downloaded }}/{{ playlist.trackCount }}</span>
     </span>

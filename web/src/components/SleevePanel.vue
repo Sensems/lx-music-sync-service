@@ -51,30 +51,30 @@ function onEnqueueTrack(t: Track) {
 </script>
 
 <template>
-  <article class="bg-card text-ink p-5 md:p-8 min-h-80 flex flex-col gap-6">
+  <article class="bg-card text-ink p-4 sm:p-5 md:p-8 min-h-80 flex flex-col gap-5 md:gap-6">
     <header class="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-      <div>
+      <div class="min-w-0">
         <p class="font-mono text-xs tracking-[0.16em] text-[#6b5346] m-0 flex items-center gap-1.5">
           <SourceIcon :source="playlist.source" :size="14" />
           {{ sourceLabels[playlist.source] }}
         </p>
-        <h2 class="font-display text-4xl m-0 mt-1">{{ playlist.name }}</h2>
-        <p class="font-mono text-xs mt-2 break-all text-[#5c4638]">{{ playlist.url }}</p>
+        <h2 class="font-display text-3xl md:text-4xl m-0 mt-1 break-words">{{ playlist.name }}</h2>
+        <p class="sleeve-url font-mono text-xs mt-2 text-[#5c4638]">{{ playlist.url }}</p>
       </div>
-      <div class="flex flex-wrap items-center gap-3 min-w-60">
-        <label class="flex items-center gap-2 text-sm cursor-pointer">
+      <div class="sleeve-actions">
+        <label class="flex items-center gap-2 text-sm cursor-pointer min-h-11">
           <Switch :checked="playlist.enabled" @change="(v) => emit('update:enabled', Boolean(v))" />
           <span>{{ playlist.enabled ? '加入定时同步' : '暂停定时' }}</span>
         </label>
         <a-button
-          class="stamp !h-11 !px-5 !text-ink !inline-flex !items-center !gap-1.5"
+          class="stamp !h-11 !px-5 !text-ink !inline-flex !items-center !gap-1.5 !flex-1 sm:!flex-none"
           :disabled="!tracks.length"
           @click="onPlayPlaylist"
         >
           <span class="i-lucide-list-music" aria-hidden="true" />
           播放歌单
         </a-button>
-        <a-button type="primary" class="stamp !h-11 !px-5 !text-ink" :loading="props.syncing" @click="press">
+        <a-button type="primary" class="stamp !h-11 !px-5 !text-ink !flex-1 sm:!flex-none" :loading="props.syncing" @click="press">
           同步
         </a-button>
       </div>
@@ -84,14 +84,14 @@ function onEnqueueTrack(t: Track) {
       <li
         v-for="(t, i) in tracks"
         :key="t.songKey"
-        class="grid grid-cols-[2rem_1fr_auto] gap-3 items-start py-2 border-0 border-b border-solid border-[#d8c6a8]"
+        class="sleeve-row"
       >
-        <span class="font-mono text-xs text-[#6b5346] pt-0.5">{{ String(i + 1).padStart(2, '0') }}</span>
-        <span>
-          <span class="block text-base">{{ t.name }}</span>
-          <span class="text-sm text-[#5c4638]">{{ t.singer }} · {{ t.album }}</span>
+        <span class="sleeve-row__idx">{{ String(i + 1).padStart(2, '0') }}</span>
+        <span class="sleeve-row__meta min-w-0">
+          <span class="sleeve-row__name">{{ t.name }}</span>
+          <span class="sleeve-row__sub">{{ t.singer }} · {{ t.album }}</span>
         </span>
-        <div class="font-mono text-xs flex flex-col items-end gap-1.5">
+        <div class="sleeve-row__ops">
           <span>
             <span v-if="t.downloaded" class="text-[#3d4a2a]">已下载</span>
             <span v-else class="text-rec">未下载</span>
@@ -114,6 +114,63 @@ function onEnqueueTrack(t: Track) {
 </template>
 
 <style scoped>
+.sleeve-url {
+  margin: 0.5rem 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sleeve-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.sleeve-row {
+  display: grid;
+  grid-template-columns: 2rem 1fr auto;
+  gap: 0.75rem;
+  align-items: start;
+  padding: 0.55rem 0;
+  border: 0;
+  border-bottom: 1px solid #d8c6a8;
+}
+
+.sleeve-row__idx {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.75rem;
+  color: #6b5346;
+  padding-top: 0.2rem;
+}
+
+.sleeve-row__name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sleeve-row__sub {
+  display: block;
+  font-size: 0.875rem;
+  color: #5c4638;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sleeve-row__ops {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+}
+
 .sleeve-row-btn {
   appearance: none;
   padding: 0.15rem 0.25rem;
@@ -131,5 +188,25 @@ function onEnqueueTrack(t: Track) {
 
 .sleeve-row-btn:hover {
   color: #3d4a2a;
+}
+
+@media (max-width: 767px) {
+  .sleeve-actions {
+    width: 100%;
+  }
+
+  .sleeve-row {
+    grid-template-columns: 1.6rem 1fr;
+    gap: 0.45rem 0.6rem;
+    padding: 0.7rem 0;
+  }
+
+  .sleeve-row__ops {
+    grid-column: 2;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+  }
 }
 </style>

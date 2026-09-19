@@ -156,7 +156,7 @@ onMounted(() => {
 
 <template>
   <section>
-    <p class="text-mute text-sm mb-4">选择左侧歌单查看曲目；点「+」添加新歌单。</p>
+    <p class="text-mute text-sm mb-3 md:mb-4">选择歌单查看曲目；点「+」添加新歌单。</p>
     <div class="flex flex-col lg:flex-row gap-6 items-stretch">
       <div
         class="shelf-spines flex gap-3 overflow-x-auto py-2 pr-2 stagger-in"
@@ -181,7 +181,7 @@ onMounted(() => {
           @update:enabled="setEnabled"
           @press="pressSync"
         />
-        <div v-else class="bg-card text-ink p-8">
+        <div v-else class="bg-card text-ink p-5 md:p-8">
           <p class="font-display text-3xl m-0">{{ loading ? '加载中…' : '还没有歌单' }}</p>
           <p class="mt-2">添加一张歌单：选择平台，粘贴链接即可。</p>
           <a-button type="primary" class="mt-4 stamp !text-ink" @click="showInsert = true">添加歌单</a-button>
@@ -215,20 +215,26 @@ onMounted(() => {
 
 <style scoped>
 .shelf-spines {
-  /* Mobile: full-width horizontal strip */
   width: 100%;
   max-width: 100%;
   min-width: 0;
   flex-shrink: 0;
-  scrollbar-gutter: stable;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+
+.shelf-spines :deep(button) {
+  scroll-snap-align: start;
 }
 
 @media (min-width: 1024px) {
   .shelf-spines {
-    /* Desktop: cap width so track panel always keeps room */
     width: min(22rem, 38vw);
     max-width: 38vw;
     flex: 0 0 auto;
+    scroll-snap-type: none;
   }
 }
 </style>

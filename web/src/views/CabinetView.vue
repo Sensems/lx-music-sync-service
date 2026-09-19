@@ -157,10 +157,10 @@ onMounted(() => {
 
 <template>
   <section class="page-panel max-w-2xl">
-    <h2 class="font-display text-4xl m-0">设置</h2>
+    <h2 class="font-display text-3xl md:text-4xl m-0">设置</h2>
     <p class="text-mute mt-2">管理音源、下载目录和外观。服务监听地址仍在配置文件里修改。</p>
 
-    <div class="mt-8 p-5 md:p-7 flex flex-col gap-6 cabinet-card">
+    <div class="mt-6 md:mt-8 p-4 sm:p-5 md:p-7 flex flex-col gap-6 cabinet-card">
       <div>
         <h3 class="font-display text-2xl m-0">外观主题</h3>
         <p class="text-sm text-mute mt-1 mb-3">选择一套配色，偏好保存在本机浏览器。</p>
@@ -264,7 +264,7 @@ onMounted(() => {
         </label>
       </div>
 
-      <a-button type="primary" class="stamp !text-ink self-start" :loading="saving" @click="save">保存设置</a-button>
+      <a-button type="primary" class="stamp !text-ink self-stretch sm:self-start !h-11" :loading="saving" @click="save">保存设置</a-button>
     </div>
   </section>
 </template>
@@ -272,8 +272,15 @@ onMounted(() => {
 <style scoped>
 .theme-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
   gap: 0.75rem;
+}
+
+@media (max-width: 767px) {
+  .theme-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
 }
 
 .theme-swatch {

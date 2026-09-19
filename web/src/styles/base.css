@@ -1,4 +1,12 @@
 :root {
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --ribbon-body: 3.05rem;
+  --ribbon-h: calc(var(--ribbon-body) + var(--safe-b));
+  --player-h: 0px;
+  --chrome-bottom: calc(var(--ribbon-h) + var(--player-h));
   --cabinet: #322824;
   --wine: #5c2a36;
   --foil: #d8ae7e;
@@ -15,16 +23,38 @@
   --glow: #5c2a3633;
 }
 
+html.has-player {
+  --player-h: 4.85rem;
+}
+
 html,
 body,
 #app {
   min-height: 100%;
+  min-height: 100dvh;
   margin: 0;
   background: var(--cabinet);
   color: var(--fg);
   font-family: 'Noto Sans SC', 'Source Han Sans SC', sans-serif;
   font-size: 16px;
   line-height: 1.5;
+}
+
+html {
+  overflow-x: clip;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: pretty;
+}
+
+button,
+a,
+[role='button'] {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: color-mix(in srgb, var(--foil) 22%, transparent);
 }
 
 body {
@@ -239,4 +269,48 @@ html[data-theme-mode='light'] .schedule-time {
 
 .page-panel {
   color: var(--fg);
+}
+
+@media (max-width: 767px) {
+  :root {
+    --ribbon-body: 2.85rem;
+    --player-h: 0px;
+  }
+
+  html.has-player {
+    --player-h: 4.7rem;
+  }
+
+  .ant-input,
+  .ant-input-affix-wrapper,
+  .ant-input-affix-wrapper input,
+  .ant-select-selector,
+  .ant-input-number-input,
+  .ant-input-number {
+    font-size: 16px !important;
+  }
+
+  .ant-modal {
+    max-width: calc(100vw - 1.25rem) !important;
+    margin: 0.75rem auto !important;
+    top: 1.5rem;
+  }
+
+  .ant-modal-content {
+    padding: 1rem 1rem 0.85rem !important;
+  }
+
+  .ant-select-dropdown {
+    max-width: calc(100vw - 1.5rem);
+  }
+}
+
+@media (min-width: 768px) {
+  :root {
+    --ribbon-body: 3.45rem;
+  }
+
+  html.has-player {
+    --player-h: 4.5rem;
+  }
 }

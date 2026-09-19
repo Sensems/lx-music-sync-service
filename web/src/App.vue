@@ -6,21 +6,28 @@ import BackToTop from './components/BackToTop.vue'
 import PlayerShell from './player/PlayerShell.vue'
 import { useTheme } from './composables/useTheme'
 import { usePlayer } from './player/usePlayer'
-import { computed } from 'vue'
+import { watch } from 'vue'
 
 const { antTheme } = useTheme()
 const player = usePlayer()
-const mainPad = computed(() => (player.current.value ? 'pb-52' : 'pb-28'))
+
+watch(
+  () => Boolean(player.current.value),
+  on => {
+    document.documentElement.classList.toggle('has-player', on)
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
   <ConfigProvider :theme="antTheme">
-    <div class="min-h-screen flex flex-col bg-cabinet text-fg">
+    <div class="app-shell min-h-dvh flex flex-col bg-cabinet text-fg">
       <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-50 bg-foil text-ink px-3 py-2">
         跳到内容
       </a>
       <StationBar />
-      <main id="main" class="flex-1 px-4 md:px-10" :class="mainPad">
+      <main id="main" class="app-main flex-1">
         <router-view v-slot="{ Component, route }">
           <Transition name="page-fade" mode="out-in">
             <component :is="Component" :key="route.path" />
@@ -33,3 +40,23 @@ const mainPad = computed(() => (player.current.value ? 'pb-52' : 'pb-28'))
     </div>
   </ConfigProvider>
 </template>
+
+<style scoped>
+.app-shell {
+  padding-top: var(--safe-t);
+  padding-left: var(--safe-l);
+  padding-right: var(--safe-r);
+}
+
+.app-main {
+  padding: 0 1rem calc(var(--chrome-bottom) + 1rem);
+}
+
+@media (min-width: 768px) {
+  .app-main {
+    padding-left: 2.5rem;
+    padding-right: 2.5rem;
+    padding-bottom: calc(var(--chrome-bottom) + 1.25rem);
+  }
+}
+</style>

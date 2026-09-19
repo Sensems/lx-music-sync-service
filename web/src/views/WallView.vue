@@ -133,7 +133,7 @@ onMounted(() => {
     <header class="wall-hero">
       <div>
         <p class="wall-kicker">LIBRARY</p>
-        <h2 class="font-display text-4xl md:text-5xl m-0">唱片墙</h2>
+        <h2 class="font-display text-3xl md:text-5xl m-0">唱片墙</h2>
         <p class="text-mute mt-2 max-w-xl m-0">
           已下载到本地的歌曲会显示在这里。点封面会出现播放。
         </p>
@@ -151,12 +151,17 @@ onMounted(() => {
     </header>
 
     <div class="wall-toolbar">
-      <Input
-        v-model:value="q"
-        allow-clear
-        placeholder="搜歌名 / 歌手 / 平台"
-        class="wall-search"
-      />
+      <label class="wall-search">
+        <span class="sr-only">搜歌名、歌手或平台</span>
+        <Input
+          v-model:value="q"
+          allow-clear
+          placeholder="搜歌名 / 歌手 / 平台"
+          autocomplete="off"
+          name="wall-q"
+          inputmode="search"
+        />
+      </label>
     </div>
 
     <Spin :spinning="loading">
@@ -233,10 +238,10 @@ onMounted(() => {
 .wall-hero {
   display: flex;
   flex-wrap: wrap;
-  gap: 1.5rem;
+  gap: 1rem 1.5rem;
   justify-content: space-between;
   align-items: end;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.25rem;
 }
 
 .wall-kicker {
@@ -276,6 +281,8 @@ onMounted(() => {
 }
 
 .wall-search {
+  display: block;
+  width: 100%;
   max-width: 22rem;
 }
 
@@ -476,10 +483,35 @@ html[data-theme-mode='light'] .wall-cover-actions__btn--play:hover {
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 767px) {
+  .wall-stats {
+    width: 100%;
+  }
+
+  .wall-stat {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .wall-search {
+    max-width: none;
+  }
+
   .wall-grid {
-    grid-template-columns: repeat(auto-fill, minmax(138px, 1fr));
-    gap: 1rem 0.75rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem 0.7rem;
+  }
+
+  .wall-cover-actions {
+    gap: 0.35rem;
+    padding: 0.4rem;
+  }
+
+  .wall-cover-actions__btn {
+    min-width: 0;
+    width: 100%;
+    font-size: 0.72rem;
+    padding: 0.35rem 0.4rem;
   }
 }
 

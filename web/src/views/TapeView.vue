@@ -131,7 +131,7 @@ onUnmounted(() => {
 
 <template>
   <section class="max-w-3xl">
-    <h2 class="font-display text-4xl m-0">任务</h2>
+    <h2 class="font-display text-3xl md:text-4xl m-0">任务</h2>
     <p class="text-mute mt-2">查看同步与下载记录：扫过多少、跳过多少、新下了多少。</p>
 
     <div v-if="lines.length" class="mt-8 relative pl-6 border-0 border-l-2 border-solid border-border stagger-in">
@@ -142,8 +142,8 @@ onUnmounted(() => {
       >
         <span class="absolute -left-[1.6rem] top-1 w-3 h-3 rounded-full bg-foil" aria-hidden="true" />
         <p class="font-mono text-xs m-0" :class="tone[line.kind]">{{ mark[line.kind] }}</p>
-        <h3 class="text-lg m-0 mt-1 text-fg">{{ line.title }}</h3>
-        <p class="text-sm text-mute m-0 mt-1">{{ line.detail }}</p>
+        <h3 class="text-lg m-0 mt-1 text-fg text-pretty">{{ line.title }}</h3>
+        <p class="text-sm text-mute m-0 mt-1 break-words">{{ line.detail }}</p>
       </article>
     </div>
     <div v-else class="mt-10 text-mute">
