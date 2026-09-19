@@ -108,6 +108,60 @@ describe('stream service', () => {
     const body = await res.json()
     expect(body.error).toBe('暂时没有可播放的地址')
   })
+
+  it('caches getMusicUrl per songKey until TTL or remote failure', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tg-st-'))
+    const repos = createRepos(openDb(join(dir, 't.db')))
+    let calls = 0
+    let clock = 1_000
+    let failRemote = false
+    const stream = createStreamService({
+      repos,
+      async getMusicUrl() {
+        calls += 1
+        return { type: '128k', url: `https://cdn.example/a${calls}.mp3` }
+      },
+      getWantedQuality: () => '128k',
+      now: () => clock,
+      async fetchRemote(url) {
+        if (failRemote) throw new Error('upstream down')
+        return {
+          status: 200,
+          headers: new Headers({ 'Content-Type': 'audio/mpeg', 'Content-Length': '1' }),
+          body: new ReadableStream({
+            start(c) {
+              c.enqueue(new Uint8Array([1]))
+              c.close()
+            },
+          }),
+        }
+      },
+    })
+    stream.remember(music())
+
+    const first = await stream.open('wy_s1', undefined)
+    expect(first.status).toBe(200)
+    expect(calls).toBe(1)
+
+    const second = await stream.open('wy_s1', 'bytes=0-0')
+    expect(second.status).toBe(200)
+    expect(calls).toBe(1)
+
+    clock += 8 * 60 * 1000 + 1
+    const third = await stream.open('wy_s1', undefined)
+    expect(third.status).toBe(200)
+    expect(calls).toBe(2)
+
+    failRemote = true
+    const failed = await stream.open('wy_s1', undefined)
+    expect(failed.status).toBe(502)
+    expect(calls).toBe(2)
+
+    failRemote = false
+    const afterFail = await stream.open('wy_s1', undefined)
+    expect(afterFail.status).toBe(200)
+    expect(calls).toBe(3)
+  })
 })
 
 describe('POST/GET /api/stream', () => {

@@ -1,13 +1,19 @@
 import { createReadStream, existsSync, statSync } from 'node:fs'
+import http from 'node:http'
+import https from 'node:https'
 import { extname } from 'node:path'
 import { Readable } from 'node:stream'
+import { httpOverHttp, httpsOverHttp } from 'tunnel'
 import type { createRepos } from '../db/repos.js'
 import { pickQuality } from '../lib/names.js'
+import { getSdkProxy } from '../sdk/proxy.js'
 import type { MusicInfo, Quality } from '../types.js'
 
 type Repos = ReturnType<typeof createRepos>
 
 const PLAY_ERROR = '暂时没有可播放的地址'
+/** Range 重试间隔短，缓存解析结果避免反复打用户脚本 */
+const URL_CACHE_TTL_MS = 8 * 60 * 1000
 
 export type StreamDeps = {
   repos: Repos
@@ -25,6 +31,20 @@ export type StreamDeps = {
     headers: Headers
     body: ReadableStream<Uint8Array> | null
   }>
+  /** 测试用：覆盖「现在」 */
+  now?: () => number
+}
+
+type UrlCacheEntry = {
+  url: string
+  quality: Quality
+  expiresAt: number
+}
+
+type RemoteResult = {
+  status: number
+  headers: Headers
+  body: ReadableStream<Uint8Array> | null
 }
 
 function parseMusicRaw(raw: string | null | undefined): MusicInfo | null {
@@ -69,20 +89,55 @@ function songQualitiesOf(
   return { [wanted]: true }
 }
 
+function getRequestAgent(url: string): http.Agent | https.Agent | undefined {
+  const proxy = getSdkProxy()
+  if (!proxy) return undefined
+  const options = { proxy: { host: proxy.host, port: proxy.port } }
+  return /^https:/.test(url) ? httpsOverHttp(options) : httpOverHttp(options)
+}
+
+function headersFromNode(nodeHeaders: http.IncomingHttpHeaders): Headers {
+  const out = new Headers()
+  for (const [key, value] of Object.entries(nodeHeaders)) {
+    if (value == null) continue
+    out.set(key, Array.isArray(value) ? value.join(', ') : value)
+  }
+  return out
+}
+
+function requestOnce(url: string, headers: Record<string, string>): Promise<RemoteResult> {
+  return new Promise((resolve, reject) => {
+    const mod = /^https:/.test(url) ? https : http
+    const req = mod.get(url, { headers, agent: getRequestAgent(url) }, res => {
+      const status = res.statusCode ?? 0
+      const outHeaders = headersFromNode(res.headers)
+      // 3xx 先排空再跟跳，避免挂死连接
+      if (status >= 300 && status < 400) {
+        res.resume()
+        resolve({ status, headers: outHeaders, body: null })
+        return
+      }
+      const body = Readable.toWeb(res) as ReadableStream<Uint8Array>
+      resolve({ status, headers: outHeaders, body })
+    })
+    req.on('error', reject)
+  })
+}
+
+/** 与下载器同一条 getSdkProxy / tunnel agent 路径；保留可注入以便测试 */
 async function defaultFetchRemote(
   url: string,
   headers: Record<string, string>,
-): Promise<{
-  status: number
-  headers: Headers
-  body: ReadableStream<Uint8Array> | null
-}> {
-  const res = await fetch(url, { headers })
-  return {
-    status: res.status,
-    headers: res.headers,
-    body: res.body as ReadableStream<Uint8Array> | null,
+): Promise<RemoteResult> {
+  let current = url
+  for (let hop = 0; hop < 5; hop++) {
+    const remote = await requestOnce(current, headers)
+    if (remote.status < 300 || remote.status >= 400) return remote
+    const location = remote.headers.get('location')
+    if (!location) return remote
+    current = new URL(location, current).toString()
   }
+  throw new Error('too many redirects')
 }
 
 function playErrorResponse(): Response {
@@ -128,7 +183,9 @@ export function createStreamService(deps: StreamDeps): {
   open(songKey: string, rangeHeader: string | undefined): Promise<Response>
 } {
   const remembered = new Map<string, MusicInfo>()
+  const urlCache = new Map<string, UrlCacheEntry>()
   const fetchRemote = deps.fetchRemote ?? defaultFetchRemote
+  const now = deps.now ?? Date.now
 
   function remember(musicInfo: MusicInfo): void {
     remembered.set(musicInfo.id, musicInfo)
@@ -144,6 +201,24 @@ export function createStreamService(deps: StreamDeps): {
 
     const track = deps.repos.tracks.findBySongKey(songKey)
     return parseMusicRaw(track?.raw)
+  }
+
+  function readUrlCache(songKey: string, quality: Quality): string | null {
+    const entry = urlCache.get(songKey)
+    if (!entry) return null
+    if (entry.quality !== quality || now() > entry.expiresAt) {
+      urlCache.delete(songKey)
+      return null
+    }
+    return entry.url
+  }
+
+  function writeUrlCache(songKey: string, quality: Quality, url: string): void {
+    urlCache.set(songKey, { url, quality, expiresAt: now() + URL_CACHE_TTL_MS })
+  }
+
+  function invalidateUrlCache(songKey: string): void {
+    urlCache.delete(songKey)
   }
 
   async function open(songKey: string, rangeHeader: string | undefined): Promise<Response> {
@@ -164,16 +239,21 @@ export function createStreamService(deps: StreamDeps): {
       songQualitiesOf(musicInfo, wanted),
     )
 
-    let url = ''
-    try {
-      const result = await deps.getMusicUrl(String(musicInfo.source), musicInfo, quality)
-      url = String(result?.url || '')
-    } catch {
-      return playErrorResponse()
-    }
+    let url = readUrlCache(songKey, quality)
+    if (!url) {
+      try {
+        const result = await deps.getMusicUrl(String(musicInfo.source), musicInfo, quality)
+        url = String(result?.url || '')
+      } catch {
+        invalidateUrlCache(songKey)
+        return playErrorResponse()
+      }
 
-    if (!url || !/^https?:/i.test(url)) {
-      return playErrorResponse()
+      if (!url || !/^https?:/i.test(url)) {
+        invalidateUrlCache(songKey)
+        return playErrorResponse()
+      }
+      writeUrlCache(songKey, quality, url)
     }
 
     const headers: Record<string, string> = {}
@@ -191,6 +271,7 @@ export function createStreamService(deps: StreamDeps): {
       outHeaders.set('Accept-Ranges', 'bytes')
       return new Response(remote.body, { status: remote.status, headers: outHeaders })
     } catch {
+      invalidateUrlCache(songKey)
       return playErrorResponse()
     }
   }

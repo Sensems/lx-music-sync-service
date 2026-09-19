@@ -116,6 +116,11 @@ function createPlayer(): PlayerApi {
     audio.addEventListener('ended', () => {
       void onEnded()
     })
+    audio.addEventListener('error', () => {
+      error.value = '暂时没有可播放的地址'
+      playing.value = false
+      syncMediaPlaybackState()
+    })
   }
 
   watch([volume, muted, loop, shuffle], () => {
@@ -206,6 +211,9 @@ function createPlayer(): PlayerApi {
       if (seq !== loadSeq) return
       error.value = '暂时没有可播放的地址'
       playing.value = false
+      // 清掉 src，避免 toggle 又播起上一首残留地址
+      audio.removeAttribute('src')
+      audio.load()
       syncMediaPlaybackState()
     }
   }

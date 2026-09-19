@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { usePlayer } from '../player/usePlayer'
 
 const visible = ref(false)
 const THRESHOLD = 320
+const player = usePlayer()
+const raised = computed(() => !!player.current.value)
 
 function onScroll() {
   visible.value = window.scrollY > THRESHOLD
@@ -29,6 +32,7 @@ onUnmounted(() => {
       v-if="visible"
       type="button"
       class="back-top"
+      :class="{ 'back-top--raised': raised }"
       aria-label="回到顶部"
       title="回到顶部"
       @click="goTop"
@@ -86,10 +90,18 @@ onUnmounted(() => {
   transform: translateY(8px);
 }
 
+.back-top--raised {
+  bottom: 9.5rem;
+}
+
 @media (max-width: 640px) {
   .back-top {
     right: 1rem;
     bottom: 5.25rem;
+  }
+
+  .back-top--raised {
+    bottom: 9.5rem;
   }
 }
 
