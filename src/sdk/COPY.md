@@ -19,3 +19,4 @@ Import rewrites:
 - `../../request` / `../../../request` → `src/sdk/request.ts`
 - `../../index` / `@renderer/utils` helpers → `src/sdk/common.ts`
 - `@renderer/utils/musicSdk/kg/vendors/infSign.min` → relative vendor path
+  (`infSign.min.cjs`；`kg/songList.js` 在 require 前垫 `navigator`，因为脚本加载时会读 `userAgent`，Node 20 没有这个全局对象)

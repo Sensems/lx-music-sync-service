@@ -21,7 +21,7 @@ const stations = [
         :key="s.to"
         :to="s.to"
         class="hit-44 px-4 no-underline border border-solid border-border text-fg hover:border-foil nav-hit"
-        active-class="!bg-wine !border-foil text-fg"
+        active-class="!bg-wine !border-foil"
       >
         <span class="flex flex-col items-start leading-tight">
           <span class="text-[10px] font-mono text-mute">{{ s.hint }}</span>

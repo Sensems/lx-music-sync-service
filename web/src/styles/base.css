@@ -97,6 +97,26 @@ html.player-lock-scroll body {
   color: var(--ink) !important;
 }
 
+/* 浅色主题里箔色偏深，按钮字改成浅色，避免深底深字 */
+html[data-theme-mode='light'] .ant-btn-primary,
+html[data-theme-mode='light'] .ant-btn-primary:hover,
+html[data-theme-mode='light'] .ant-btn-primary:focus,
+html[data-theme-mode='light'] .ant-btn-primary:active,
+html[data-theme-mode='light'] .ant-btn-primary.ant-btn-primary:not(:disabled):hover,
+html[data-theme-mode='light'] .ant-btn-primary.ant-btn-primary:not(:disabled):active {
+  color: var(--card) !important;
+}
+
+html[data-theme-mode='light'] .nav-hit.router-link-active,
+html[data-theme-mode='light'] .nav-hit.router-link-exact-active {
+  color: var(--card);
+}
+
+html[data-theme-mode='light'] .nav-hit.router-link-active .text-mute,
+html[data-theme-mode='light'] .nav-hit.router-link-exact-active .text-mute {
+  color: color-mix(in srgb, var(--card) 72%, transparent);
+}
+
 .ant-modal-content {
   border: 1px solid var(--border);
 }

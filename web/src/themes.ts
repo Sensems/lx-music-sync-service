@@ -225,6 +225,7 @@ export function buildAntTheme(appTheme: AppTheme): ThemeConfig {
       colorTextBase: tokens.fg,
       colorText: tokens.fg,
       colorTextSecondary: tokens.mute,
+      colorTextLightSolid: mode === 'light' ? tokens.card : tokens.ink,
       colorBorder: tokens.border,
       colorBorderSecondary: tokens.border,
       borderRadius: 2,

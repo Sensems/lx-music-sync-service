@@ -69,13 +69,16 @@ const carLyrics = computed(() => {
     return lines[i]?.text || ' '
   }
   if (lines.length === 0) {
-    return { prev: ' ', now: '暂无歌词', next: ' ' }
+    return { farPrev: ' ', prev: ' ', now: '暂无歌词', next: ' ', farNext: ' ' }
   }
-  const i = lyricIndex.value
-  if (i < 0) {
-    return { prev: ' ', now: textAt(0), next: textAt(1) }
+  const i = lyricIndex.value < 0 ? 0 : lyricIndex.value
+  return {
+    farPrev: textAt(i - 2),
+    prev: textAt(i - 1),
+    now: textAt(i),
+    next: textAt(i + 1),
+    farNext: textAt(i + 2),
   }
-  return { prev: textAt(i - 1), now: textAt(i), next: textAt(i + 1) }
 })
 
 watch(error, (msg) => {
@@ -313,9 +316,11 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="player-car__lyric-col" aria-live="polite">
+          <p class="player-car__line is-far">{{ carLyrics.farPrev }}</p>
           <p class="player-car__line is-prev">{{ carLyrics.prev }}</p>
           <p class="player-car__line is-now">{{ carLyrics.now }}</p>
           <p class="player-car__line is-next">{{ carLyrics.next }}</p>
+          <p class="player-car__line is-far">{{ carLyrics.farNext }}</p>
         </div>
       </div>
       <div class="player-car__seek">
@@ -706,6 +711,10 @@ onUnmounted(() => {
   background: var(--foil);
   color: var(--ink);
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
+}
+
+html[data-theme-mode='light'] .player-bar__badge {
+  color: var(--card);
 }
 
 .player-groove {
@@ -1204,14 +1213,19 @@ onUnmounted(() => {
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  gap: 1.15rem;
+  gap: 0.85rem;
   text-align: center;
 }
 
 .player-car__line {
   margin: 0;
   max-width: 100%;
-  line-height: 1.45;
+  line-height: 1.4;
+}
+
+.player-car__line.is-far {
+  font-size: clamp(1.05rem, 2.1vw, 1.45rem);
+  color: color-mix(in srgb, var(--mute) 72%, transparent);
 }
 
 .player-car__line.is-prev,
@@ -1412,7 +1426,7 @@ onUnmounted(() => {
   .player-car__lyric-col {
     flex: 1;
     width: 100%;
-    gap: 0.7rem;
+    gap: 0.5rem;
   }
 
   .player-car__seek {

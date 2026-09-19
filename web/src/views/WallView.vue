@@ -391,6 +391,10 @@ onMounted(() => {
   color: var(--ink);
 }
 
+html[data-theme-mode='light'] .wall-cover-actions__btn--play {
+  color: var(--card);
+}
+
 .wall-cover-actions__btn:hover {
   border-color: var(--foil);
   color: var(--foil);
@@ -400,6 +404,10 @@ onMounted(() => {
   background: var(--tungsten);
   border-color: var(--tungsten);
   color: var(--ink);
+}
+
+html[data-theme-mode='light'] .wall-cover-actions__btn--play:hover {
+  color: var(--card);
 }
 
 .wall-card:hover .wall-cover,
