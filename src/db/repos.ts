@@ -213,6 +213,13 @@ export function createRepos(db: Database.Database) {
         .all(playlistId) as Record<string, unknown>[]
       return rows.map(rowToTrack)
     },
+
+    findBySongKey(songKey: string): TrackRow | undefined {
+      const row = db
+        .prepare('SELECT * FROM playlist_tracks WHERE song_key = ? ORDER BY rowid LIMIT 1')
+        .get(songKey) as Record<string, unknown> | undefined
+      return row ? rowToTrack(row) : undefined
+    },
   }
 
   const downloads = {

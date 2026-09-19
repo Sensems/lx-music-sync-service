@@ -196,6 +196,46 @@ describe('playlist CRUD and sync', () => {
   })
 })
 
+describe('playlist tracks payload', () => {
+  it('includes musicInfo parsed from raw', async () => {
+    const { createApp: create } = await import('../src/http/app.js')
+    const ctx = makeTestCtx()
+    const app = create(ctx)
+    const created = await (
+      await app.request('/api/playlists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: 'wy', url: 'https://music.163.com/playlist?id=1' }),
+      })
+    ).json()
+    ctx.repos.tracks.replaceAll(created.id, [
+      {
+        playlist_id: created.id,
+        song_key: 'wy_1',
+        name: '夜曲',
+        singer: '周杰伦',
+        album: '十一月的萧邦',
+        qualitys: '[]',
+        raw: JSON.stringify({
+          id: 'wy_1',
+          name: '夜曲',
+          singer: '周杰伦',
+          source: 'wy',
+          interval: null,
+          meta: { picUrl: 'https://example.com/p.jpg' },
+        }),
+      },
+    ])
+    const res = await app.request(`/api/playlists/${created.id}/tracks`)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.list[0].songKey).toBe('wy_1')
+    expect(body.list[0].musicInfo.id).toBe('wy_1')
+    expect(body.list[0].picUrl).toBe('https://example.com/p.jpg')
+    expect(ctx.repos.tracks.findBySongKey('wy_1')?.name).toBe('夜曲')
+  })
+})
+
 describe('search jobs downloads settings', () => {
   it('validates search q and returns jobs/downloads/settings/status', async () => {
     const { createApp: create } = await import('../src/http/app.js')

@@ -179,13 +179,25 @@ export function createApp(ctx: AppCtx): Hono {
     const tracks = repos.tracks.list(id)
     const downloads = new Set(repos.downloads.list().map(d => d.song_key))
     return c.json({
-      list: tracks.map(t => ({
-        songKey: t.song_key,
-        name: t.name,
-        singer: t.singer,
-        album: t.album,
-        downloaded: downloads.has(t.song_key),
-      })),
+      list: tracks.map(t => {
+        let musicInfo: MusicInfo | null = null
+        try {
+          musicInfo = JSON.parse(t.raw || '{}') as MusicInfo
+          if (!musicInfo?.id) musicInfo = null
+        } catch {
+          musicInfo = null
+        }
+        const picUrl = String(musicInfo?.meta?.picUrl || '')
+        return {
+          songKey: t.song_key,
+          name: t.name,
+          singer: t.singer,
+          album: t.album,
+          downloaded: downloads.has(t.song_key),
+          musicInfo,
+          picUrl,
+        }
+      }),
     })
   })
 

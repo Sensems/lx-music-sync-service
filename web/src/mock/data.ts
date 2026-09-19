@@ -18,6 +18,15 @@ export interface Track {
   singer: string
   album: string
   downloaded: boolean
+  musicInfo?: {
+    id: string
+    name: string
+    singer: string
+    source: string
+    interval: number | null
+    meta: Record<string, unknown>
+  } | null
+  picUrl?: string
 }
 
 export interface SearchHit {
