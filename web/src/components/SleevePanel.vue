@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { Switch } from 'ant-design-vue'
+import { Switch, message } from 'ant-design-vue'
 import type { Playlist, Track } from '../mock/data'
 import { sourceLabels } from '../mock/data'
 import SourceIcon from './SourceIcon.vue'
+import { usePlayer } from '../player/usePlayer'
+import type { PlayItem } from '../player/types'
 
 const props = defineProps<{
   playlist: Playlist
@@ -15,8 +17,36 @@ const emit = defineEmits<{
   press: []
 }>()
 
+const { playList, playOne, enqueue } = usePlayer()
+
+function toItem(t: Track): PlayItem {
+  return {
+    songKey: t.songKey,
+    name: t.name,
+    singer: t.singer,
+    picUrl: t.picUrl || '',
+    source: String(t.musicInfo?.source || ''),
+    musicInfo: t.musicInfo ?? null,
+  }
+}
+
 function press() {
   emit('press')
+}
+
+async function onPlayPlaylist() {
+  if (!props.tracks.length) return
+  await playList(props.tracks.map(toItem))
+}
+
+async function onPlayTrack(t: Track) {
+  await playOne(toItem(t))
+}
+
+function onEnqueueTrack(t: Track) {
+  const { added, started } = enqueue(toItem(t))
+  if (!added) message.info('已经在队列里')
+  else if (!started) message.success('已加入队列')
 }
 </script>
 
@@ -36,6 +66,13 @@ function press() {
           <Switch :checked="playlist.enabled" @change="(v) => emit('update:enabled', Boolean(v))" />
           <span>{{ playlist.enabled ? '加入定时同步' : '暂停定时' }}</span>
         </label>
+        <a-button
+          class="stamp !h-11 !px-5 !text-ink"
+          :disabled="!tracks.length"
+          @click="onPlayPlaylist"
+        >
+          播放歌单
+        </a-button>
         <a-button type="primary" class="stamp !h-11 !px-5 !text-ink" :loading="props.syncing" @click="press">
           同步
         </a-button>
@@ -46,19 +83,43 @@ function press() {
       <li
         v-for="(t, i) in tracks"
         :key="t.songKey"
-        class="grid grid-cols-[2rem_1fr_auto] gap-3 items-baseline py-2 border-0 border-b border-solid border-[#d8c6a8]"
+        class="grid grid-cols-[2rem_1fr_auto] gap-3 items-start py-2 border-0 border-b border-solid border-[#d8c6a8]"
       >
-        <span class="font-mono text-xs text-[#6b5346]">{{ String(i + 1).padStart(2, '0') }}</span>
+        <span class="font-mono text-xs text-[#6b5346] pt-0.5">{{ String(i + 1).padStart(2, '0') }}</span>
         <span>
           <span class="block text-base">{{ t.name }}</span>
           <span class="text-sm text-[#5c4638]">{{ t.singer }} · {{ t.album }}</span>
         </span>
-        <span class="font-mono text-xs">
-          <span v-if="t.downloaded" class="text-[#3d4a2a]">已下载</span>
-          <span v-else class="text-rec">未下载</span>
-        </span>
+        <div class="font-mono text-xs flex flex-col items-end gap-1.5">
+          <span>
+            <span v-if="t.downloaded" class="text-[#3d4a2a]">已下载</span>
+            <span v-else class="text-rec">未下载</span>
+          </span>
+          <span class="flex gap-2">
+            <button type="button" class="sleeve-row-btn" @click="onPlayTrack(t)">播放</button>
+            <button type="button" class="sleeve-row-btn" @click="onEnqueueTrack(t)">加入队列</button>
+          </span>
+        </div>
       </li>
     </ol>
     <p v-else class="text-sm text-[#5c4638] m-0">还没有曲目列表。点「同步」从线上拉取。</p>
   </article>
 </template>
+
+<style scoped>
+.sleeve-row-btn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.sleeve-row-btn:hover {
+  color: #3d4a2a;
+}
+</style>
