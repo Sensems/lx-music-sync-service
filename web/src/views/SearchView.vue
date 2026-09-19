@@ -4,6 +4,10 @@ import { Input, Select, message } from 'ant-design-vue'
 import { api } from '../api'
 import SourceIcon from '../components/SourceIcon.vue'
 import { sourceLabels, type SourceId, type SearchHit } from '../mock/data'
+import { usePlayer } from '../player/usePlayer'
+import type { PlayItem } from '../player/types'
+
+const { playOne, enqueue } = usePlayer()
 
 const q = ref('')
 const source = ref<SourceId | 'all'>('all')
@@ -40,6 +44,34 @@ async function runSearch() {
   } finally {
     searching.value = false
   }
+}
+
+function toItem(h: SearchHit): PlayItem {
+  return {
+    songKey: h.songKey,
+    name: h.name,
+    singer: h.singer,
+    picUrl: String(h.meta?.picUrl || ''),
+    source: h.source,
+    musicInfo: {
+      id: h.songKey,
+      name: h.name,
+      singer: h.singer,
+      source: h.source,
+      interval: h.interval ?? null,
+      meta: h.meta ?? {},
+    },
+  }
+}
+
+async function onPlay(hit: SearchHit) {
+  await playOne(toItem(hit))
+}
+
+function onEnqueue(hit: SearchHit) {
+  const { added, started } = enqueue(toItem(hit))
+  if (!added) message.info('已经在队列里')
+  else if (!started) message.success('已加入队列')
 }
 
 async function press(hit: SearchHit) {
@@ -101,14 +133,18 @@ async function press(hit: SearchHit) {
             <span class="text-sm text-[#5c4638]">{{ h.singer }} · {{ sourceLabels[h.source] }}</span>
           </span>
         </span>
-        <a-button
-          type="primary"
-          class="stamp !text-ink"
-          :loading="pressing === h.songKey"
-          @click="press(h)"
-        >
-          下载到本地
-        </a-button>
+        <div class="flex flex-wrap gap-2 justify-end max-w-[14rem] sm:max-w-none">
+          <button type="button" class="search-row-btn" @click="onPlay(h)">播放</button>
+          <button type="button" class="search-row-btn" @click="onEnqueue(h)">加入队列</button>
+          <a-button
+            type="primary"
+            class="stamp !text-ink !h-auto !px-2 !py-0.5 !text-xs sm:!text-sm"
+            :loading="pressing === h.songKey"
+            @click="press(h)"
+          >
+            下载到本地
+          </a-button>
+        </div>
       </li>
     </ol>
 
@@ -118,3 +154,28 @@ async function press(hit: SearchHit) {
     </div>
   </section>
 </template>
+
+<style scoped>
+.search-row-btn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+
+@media (min-width: 640px) {
+  .search-row-btn {
+    font-size: 0.875rem;
+  }
+}
+
+.search-row-btn:hover {
+  color: #3d4a2a;
+}
+</style>
