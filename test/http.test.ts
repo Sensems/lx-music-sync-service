@@ -311,6 +311,40 @@ describe('search jobs downloads settings', () => {
   })
 })
 
+describe('GET /api/lyrics', () => {
+  it('prefers download row fields over parsed musicInfo metadata', async () => {
+    const { createApp: create } = await import('../src/http/app.js')
+    const ctx = makeTestCtx()
+    const app = create(ctx)
+    ctx.repos.downloads.upsert({
+      song_key: 'wy_pic_row',
+      file_path: join(ctx.dataDir, 'music', 'wy_pic_row.mp3'),
+      quality: '320k',
+      playlist_id: null,
+      source_kind: 'search',
+      completed_at: Date.now(),
+      name: 'Row Title',
+      singer: 'Row Singer',
+      source: 'wy',
+      pic_url: 'https://example.com/from-row.jpg',
+      raw: JSON.stringify({
+        id: 'wy_pic_row',
+        name: 'Raw Title',
+        singer: 'Raw Singer',
+        source: 'wy',
+        interval: null,
+        meta: {},
+      }),
+    })
+    const res = await app.request('/api/lyrics?songKey=wy_pic_row')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.picUrl).toBe('https://example.com/from-row.jpg')
+    expect(body.name).toBe('Row Title')
+    expect(body.singer).toBe('Row Singer')
+  })
+})
+
 describe('POST /api/lyrics', () => {
   it('accepts musicInfo without a download row', async () => {
     const { createApp: create } = await import('../src/http/app.js')

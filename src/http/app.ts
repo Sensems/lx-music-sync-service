@@ -75,26 +75,32 @@ function asMusicInfo(body: Record<string, unknown>): MusicInfo | null {
   return null
 }
 
-async function lyricPayload(songKey: string, musicInfo: MusicInfo) {
+type LyricDownloadOverlay = Pick<DownloadRow, 'name' | 'singer' | 'source' | 'pic_url'>
+
+function lyricDisplayFields(musicInfo: MusicInfo, row?: LyricDownloadOverlay) {
+  return {
+    name: row?.name || musicInfo.name,
+    singer: row?.singer || musicInfo.singer,
+    source: row?.source || musicInfo.source,
+    picUrl: row?.pic_url || String(musicInfo.meta?.picUrl || ''),
+  }
+}
+
+async function lyricPayload(songKey: string, musicInfo: MusicInfo, row?: LyricDownloadOverlay) {
+  const display = lyricDisplayFields(musicInfo, row)
   try {
     const { getLyricForMusic } = await import('../services/lyrics.js')
     const lyric = await getLyricForMusic(musicInfo)
     return {
       songKey,
-      name: musicInfo.name,
-      singer: musicInfo.singer,
-      source: musicInfo.source,
-      picUrl: String(musicInfo.meta?.picUrl || ''),
+      ...display,
       lyric: lyric.lyric || '',
       tlyric: lyric.tlyric || '',
     }
   } catch {
     return {
       songKey,
-      name: musicInfo.name,
-      singer: musicInfo.singer,
-      source: musicInfo.source,
-      picUrl: String(musicInfo.meta?.picUrl || ''),
+      ...display,
       lyric: '',
       tlyric: '',
     }
@@ -354,7 +360,7 @@ export function createApp(ctx: AppCtx): Hono {
         meta: { picUrl: row.pic_url },
       }
     }
-    return c.json(await lyricPayload(songKey, musicInfo))
+    return c.json(await lyricPayload(songKey, musicInfo, row))
   })
 
   app.post('/api/lyrics', async c => {
