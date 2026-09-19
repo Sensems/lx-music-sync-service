@@ -75,6 +75,32 @@ function asMusicInfo(body: Record<string, unknown>): MusicInfo | null {
   return null
 }
 
+async function lyricPayload(songKey: string, musicInfo: MusicInfo) {
+  try {
+    const { getLyricForMusic } = await import('../services/lyrics.js')
+    const lyric = await getLyricForMusic(musicInfo)
+    return {
+      songKey,
+      name: musicInfo.name,
+      singer: musicInfo.singer,
+      source: musicInfo.source,
+      picUrl: String(musicInfo.meta?.picUrl || ''),
+      lyric: lyric.lyric || '',
+      tlyric: lyric.tlyric || '',
+    }
+  } catch {
+    return {
+      songKey,
+      name: musicInfo.name,
+      singer: musicInfo.singer,
+      source: musicInfo.source,
+      picUrl: String(musicInfo.meta?.picUrl || ''),
+      lyric: '',
+      tlyric: '',
+    }
+  }
+}
+
 async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<Record<string, unknown>> {
   try {
     const body = await c.req.json()
@@ -328,21 +354,25 @@ export function createApp(ctx: AppCtx): Hono {
         meta: { picUrl: row.pic_url },
       }
     }
-    try {
-      const { getLyricForMusic } = await import('../services/lyrics.js')
-      const lyric = await getLyricForMusic(musicInfo)
-      return c.json({
-        songKey,
-        name: row.name || musicInfo.name,
-        singer: row.singer || musicInfo.singer,
-        source: row.source || musicInfo.source,
-        picUrl: row.pic_url || String(musicInfo.meta?.picUrl || ''),
-        ...lyric,
-      })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      return c.json({ error: message }, 500)
+    return c.json(await lyricPayload(songKey, musicInfo))
+  })
+
+  app.post('/api/lyrics', async c => {
+    const body = await readJson(c)
+    let musicInfo = asMusicInfo(body)
+    const songKey = typeof body.songKey === 'string' ? body.songKey : musicInfo?.id
+    if (!musicInfo && typeof body.songKey === 'string') {
+      const row = repos.downloads.get(body.songKey)
+      const track = repos.tracks.findBySongKey(body.songKey)
+      const raw = row?.raw || track?.raw || '{}'
+      try {
+        musicInfo = JSON.parse(raw) as MusicInfo
+      } catch {
+        musicInfo = null
+      }
     }
+    if (!musicInfo?.id || !songKey) return c.json({ error: 'musicInfo or songKey required' }, 400)
+    return c.json(await lyricPayload(songKey, musicInfo))
   })
 
   app.get('/api/source/status', c => {

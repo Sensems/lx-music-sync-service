@@ -311,6 +311,72 @@ describe('search jobs downloads settings', () => {
   })
 })
 
+describe('POST /api/lyrics', () => {
+  it('accepts musicInfo without a download row', async () => {
+    const { createApp: create } = await import('../src/http/app.js')
+    const app = create(makeTestCtx())
+    const res = await app.request('/api/lyrics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        musicInfo: {
+          id: 'wy_lyric',
+          name: '词',
+          singer: '唱',
+          source: 'wy',
+          interval: null,
+          meta: {},
+        },
+      }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toHaveProperty('lyric')
+    expect(body).toHaveProperty('tlyric')
+    expect(body.songKey).toBe('wy_lyric')
+  })
+
+  it('resolves songKey from playlist track when no download row', async () => {
+    const { createApp: create } = await import('../src/http/app.js')
+    const ctx = makeTestCtx()
+    const app = create(ctx)
+    const created = await (
+      await app.request('/api/playlists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: 'wy', url: 'https://music.163.com/playlist?id=99' }),
+      })
+    ).json()
+    ctx.repos.tracks.replaceAll(created.id, [
+      {
+        playlist_id: created.id,
+        song_key: 'wy_track_lyric',
+        name: 'Track',
+        singer: 'S',
+        album: '',
+        qualitys: '[]',
+        raw: JSON.stringify({
+          id: 'wy_track_lyric',
+          name: 'Track',
+          singer: 'S',
+          source: 'wy',
+          interval: null,
+          meta: {},
+        }),
+      },
+    ])
+    const res = await app.request('/api/lyrics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ songKey: 'wy_track_lyric' }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.songKey).toBe('wy_track_lyric')
+    expect(body.name).toBe('Track')
+  })
+})
+
 describe('loadConfig', () => {
   it('defaults host port dataDir logLevel', async () => {
     const { loadConfig } = await import('../src/config.js')
