@@ -37,6 +37,10 @@ export type AppCtx = {
     getStatus(): SourceStatus
     setProxy(proxy: { host: string; port: number } | null): void
   }
+  stream: {
+    remember(musicInfo: MusicInfo): void
+    open(songKey: string, rangeHeader: string | undefined): Promise<Response>
+  }
   /** Called after schedule-related settings change so serve can reschedule cron. */
   rescheduleCron?: () => void
 }
@@ -246,6 +250,20 @@ export function createApp(ctx: AppCtx): Hono {
 
   app.get('/api/downloads', c => {
     return c.json({ list: repos.downloads.list() })
+  })
+
+  app.post('/api/stream', async c => {
+    const body = await readJson(c)
+    const musicInfo = asMusicInfo(body)
+    if (!musicInfo) return c.json({ error: 'musicInfo or source+id required' }, 400)
+    ctx.stream.remember(musicInfo)
+    return c.json({ songKey: musicInfo.id })
+  })
+
+  app.get('/api/stream', async c => {
+    const songKey = c.req.query('songKey')
+    if (!songKey) return c.json({ error: 'songKey required' }, 400)
+    return ctx.stream.open(songKey, c.req.header('Range'))
   })
 
   app.post('/api/downloads/backfill-covers', async c => {

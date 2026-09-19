@@ -105,6 +105,12 @@ function makeTestCtx(): AppCtx {
         proxyUpdates.push(proxy)
       },
     },
+    stream: {
+      remember() {},
+      async open() {
+        return Response.json({ error: 'not found' }, { status: 404 })
+      },
+    },
     _test: { loaded, proxyUpdates },
   } as AppCtx & { _test: { loaded: string[]; proxyUpdates: Array<{ host: string; port: number } | null> } }
 }

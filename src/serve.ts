@@ -12,7 +12,9 @@ import { proxyFromSettings } from './sdk/proxy.js'
 import sdk, { createSdkGetListDetail } from './sdk/load.js'
 import { createPlaylistService } from './services/playlists.js'
 import { createSearchService } from './services/search.js'
+import { createStreamService } from './services/stream.js'
 import { createSyncService } from './services/sync.js'
+import type { Quality } from './types.js'
 import { createUserApiRuntime } from './userApi/runtime.js'
 
 export type CronSettings = {
@@ -111,6 +113,11 @@ export async function createAppContext(config?: AppConfig): Promise<AppCtx> {
     downloadFile,
   })
   const search = createSearchService(sdk)
+  const stream = createStreamService({
+    repos,
+    getMusicUrl: (source, musicInfo, quality) => runtime.getMusicUrl(source, musicInfo, quality),
+    getWantedQuality: () => (repos.settings.getAll().quality as Quality) || '128k',
+  })
 
   return {
     dataDir,
@@ -120,6 +127,7 @@ export async function createAppContext(config?: AppConfig): Promise<AppCtx> {
       refreshPlaylistSnapshot: id => playlists.refreshPlaylistSnapshot(id),
     },
     search,
+    stream,
     runtime: {
       load: script => runtime.load(script),
       getStatus: () => runtime.getStatus(),
