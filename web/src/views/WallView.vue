@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { Drawer, Input, Spin, message } from 'ant-design-vue'
+import { computed, onMounted, ref } from 'vue'
+import { Input, Spin, message } from 'ant-design-vue'
 import { api } from '../api'
 import SourceIcon from '../components/SourceIcon.vue'
 import type { SourceId } from '../mock/data'
 import { sourceLabels } from '../mock/data'
+import { usePlayer } from '../player/usePlayer'
+import type { PlayItem } from '../player/types'
 
 type WallSong = {
   song_key: string
@@ -18,25 +20,13 @@ type WallSong = {
   completed_at: number
 }
 
-type LyricPayload = {
-  lyric: string
-  tlyric?: string
-  name?: string
-  singer?: string
-  picUrl?: string
-  error?: string
-}
+const { playOne, enqueue } = usePlayer()
 
 const songs = ref<WallSong[]>([])
 const loading = ref(true)
 const q = ref('')
-const open = ref(false)
-const active = ref<WallSong | null>(null)
-const lyricLoading = ref(false)
-const lyric = ref('')
-const tlyric = ref('')
+const selectedKey = ref('')
 const coverBroken = ref<Record<string, boolean>>({})
-const drawerWidth = ref(440)
 
 const filtered = computed(() => {
   const needle = q.value.trim().toLowerCase()
@@ -47,6 +37,17 @@ const filtered = computed(() => {
   })
 })
 
+function toItem(song: WallSong): PlayItem {
+  return {
+    songKey: song.song_key,
+    name: song.name,
+    singer: song.singer,
+    picUrl: song.pic_url,
+    source: song.source,
+    musicInfo: null,
+  }
+}
+
 function markBroken(key: string) {
   coverBroken.value = { ...coverBroken.value, [key]: true }
 }
@@ -56,16 +57,24 @@ function coverOf(song: WallSong): string {
   return song.pic_url
 }
 
-function linesOf(text: string): string[] {
-  return text
-    .replace(/\r/g, '')
-    .split('\n')
-    .map(l => l.replace(/^\[\d{1,2}:\d{2}(?:\.\d+)?\]/, '').trim())
-    .filter(Boolean)
+function toggleSelect(song: WallSong) {
+  selectedKey.value = selectedKey.value === song.song_key ? '' : song.song_key
 }
 
-function syncDrawerWidth() {
-  drawerWidth.value = Math.min(460, Math.max(300, window.innerWidth - 24))
+function clearSelectionIfOutside(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  if (!target.closest('.wall-card')) selectedKey.value = ''
+}
+
+async function onPlay(song: WallSong) {
+  await playOne(toItem(song))
+  selectedKey.value = ''
+}
+
+function onEnqueue(song: WallSong) {
+  const { added, started } = enqueue(toItem(song))
+  if (!added) message.info('已经在队列里')
+  else if (!started) message.success('已加入队列')
 }
 
 async function load() {
@@ -114,44 +123,19 @@ async function load() {
   }
 }
 
-async function openSong(song: WallSong) {
-  active.value = song
-  open.value = true
-  lyric.value = ''
-  tlyric.value = ''
-  lyricLoading.value = true
-  try {
-    const body = (await api.lyrics(song.song_key)) as LyricPayload
-    if (body.error) throw new Error(body.error)
-    lyric.value = body.lyric || ''
-    tlyric.value = body.tlyric || ''
-  } catch (err) {
-    lyric.value = ''
-    message.error(err instanceof Error ? err.message : '歌词获取失败')
-  } finally {
-    lyricLoading.value = false
-  }
-}
-
 onMounted(() => {
-  syncDrawerWidth()
-  window.addEventListener('resize', syncDrawerWidth)
   void load()
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', syncDrawerWidth)
 })
 </script>
 
 <template>
-  <section class="wall-page">
+  <section class="wall-page" @click="clearSelectionIfOutside">
     <header class="wall-hero">
       <div>
         <p class="wall-kicker">LIBRARY</p>
         <h2 class="font-display text-4xl md:text-5xl m-0">唱片墙</h2>
         <p class="text-mute mt-2 max-w-xl m-0">
-          已下载到本地的歌曲会显示在这里。点封面可以查看在线歌词。
+          已下载到本地的歌曲会显示在这里。点封面会出现播放。
         </p>
       </div>
       <div class="wall-stats">
@@ -177,17 +161,24 @@ onUnmounted(() => {
 
     <Spin :spinning="loading">
       <div v-if="filtered.length" class="wall-grid stagger-in">
-        <button
+        <div
           v-for="(song, idx) in filtered"
           :key="song.song_key"
-          type="button"
           class="wall-card"
           :style="{ '--i': String(idx % 12) }"
-          @click="openSong(song)"
+          @click.stop
         >
           <div class="wall-sleeve">
             <div class="wall-vinyl" aria-hidden="true" />
-            <div class="wall-cover">
+            <div
+              class="wall-cover"
+              :class="{ 'wall-cover--selected': selectedKey === song.song_key }"
+              role="button"
+              tabindex="0"
+              @click="toggleSelect(song)"
+              @keydown.enter.prevent="toggleSelect(song)"
+              @keydown.space.prevent="toggleSelect(song)"
+            >
               <img
                 v-if="coverOf(song)"
                 class="wall-cover__img"
@@ -200,6 +191,18 @@ onUnmounted(() => {
                 <span>{{ (song.name || '?').slice(0, 1) }}</span>
               </div>
               <SourceIcon class="wall-card__badge" :source="song.source" :size="20" />
+              <div
+                v-if="selectedKey === song.song_key"
+                class="wall-cover-actions"
+                @click.stop
+              >
+                <button type="button" class="wall-cover-actions__btn" @click.stop="onPlay(song)">
+                  播放
+                </button>
+                <button type="button" class="wall-cover-actions__btn" @click.stop="onEnqueue(song)">
+                  加入队列
+                </button>
+              </div>
             </div>
           </div>
           <div class="wall-card__meta">
@@ -210,58 +213,13 @@ onUnmounted(() => {
               <span v-if="song.quality"> · {{ song.quality }}</span>
             </p>
           </div>
-        </button>
+        </div>
       </div>
       <div v-else-if="!loading" class="wall-empty">
         <p class="font-display text-3xl text-fg m-0">还没有下载的歌曲</p>
         <p class="text-mute">去搜索下载一首，或在歌单里点同步。</p>
       </div>
     </Spin>
-
-    <Drawer
-      v-model:open="open"
-      placement="right"
-      :width="drawerWidth"
-      :title="active ? active.name : '歌词'"
-      root-class-name="lyric-drawer"
-    >
-      <div v-if="active" class="lyric-panel">
-        <div class="lyric-head">
-          <div class="lyric-cover-wrap">
-            <img
-              v-if="coverOf(active)"
-              class="lyric-cover"
-              :src="coverOf(active)"
-              :alt="active.name"
-              @error="markBroken(active.song_key)"
-            />
-            <div v-else class="lyric-cover lyric-cover--empty">
-              {{ (active.name || '?').slice(0, 1) }}
-            </div>
-          </div>
-          <div>
-            <p class="lyric-title">{{ active.name }}</p>
-            <p class="lyric-artist">{{ active.singer }}</p>
-            <p class="lyric-source">
-              <SourceIcon :source="active.source" :size="16" />
-              <span>{{ sourceLabels[active.source as SourceId] || active.source }}</span>
-            </p>
-          </div>
-        </div>
-
-        <Spin :spinning="lyricLoading">
-          <div v-if="lyric" class="lyric-body">
-            <p v-for="(line, i) in linesOf(lyric)" :key="'l' + i" class="lyric-line">{{ line }}</p>
-            <template v-if="tlyric">
-              <hr class="lyric-hr" />
-              <p class="lyric-trans-label">译</p>
-              <p v-for="(line, i) in linesOf(tlyric)" :key="'t' + i" class="lyric-line lyric-line--trans">{{ line }}</p>
-            </template>
-          </div>
-          <p v-else-if="!lyricLoading" class="text-mute">这首暂时没有歌词。</p>
-        </Spin>
-      </div>
-    </Drawer>
   </section>
 </template>
 
@@ -327,12 +285,9 @@ onUnmounted(() => {
 
 .wall-card {
   --i: 0;
-  appearance: none;
-  border: 0;
-  background: transparent;
   color: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: default;
   padding: 0;
   animation: wall-rise 0.45s ease both;
   animation-delay: calc(var(--i) * 35ms);
@@ -371,6 +326,7 @@ onUnmounted(() => {
     transform 0.25s ease,
     border-color 0.25s ease,
     box-shadow 0.25s ease;
+  cursor: pointer;
 }
 
 .wall-cover__img {
@@ -393,8 +349,42 @@ onUnmounted(() => {
     linear-gradient(145deg, var(--elevated), var(--cabinet));
 }
 
+.wall-cover-actions {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.5rem;
+  background: color-mix(in srgb, var(--cabinet) 82%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.wall-cover-actions__btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 0.78rem;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+  min-width: 5.5rem;
+  transition:
+    border-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.wall-cover-actions__btn:hover {
+  border-color: var(--foil);
+  color: var(--foil);
+}
+
 .wall-card:hover .wall-cover,
-.wall-card:focus-visible .wall-cover {
+.wall-cover:focus-visible,
+.wall-cover--selected {
   transform: translateY(-3px) translateX(-2px);
   border-color: var(--foil);
   box-shadow:
@@ -403,7 +393,7 @@ onUnmounted(() => {
 }
 
 .wall-card:hover .wall-vinyl,
-.wall-card:focus-visible .wall-vinyl {
+.wall-card:has(.wall-cover--selected) .wall-vinyl {
   transform: translateX(10px);
 }
 
@@ -411,6 +401,7 @@ onUnmounted(() => {
   position: absolute;
   right: 0.45rem;
   bottom: 0.45rem;
+  z-index: 1;
   background: color-mix(in srgb, var(--cabinet) 88%, transparent);
   border-radius: 4px;
   padding: 2px;
@@ -446,91 +437,6 @@ onUnmounted(() => {
   padding: 3rem 0;
 }
 
-.lyric-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-}
-
-.lyric-head {
-  display: grid;
-  grid-template-columns: 96px 1fr;
-  gap: 0.95rem;
-  align-items: center;
-}
-
-.lyric-cover-wrap {
-  width: 96px;
-  height: 96px;
-}
-
-.lyric-cover {
-  width: 96px;
-  height: 96px;
-  object-fit: cover;
-  border: 1px solid var(--border);
-  display: block;
-  background: linear-gradient(145deg, var(--elevated), var(--cabinet));
-}
-
-.lyric-cover--empty {
-  display: grid;
-  place-items: center;
-  font-family: Georgia, 'Times New Roman', serif;
-  font-size: 2rem;
-  color: color-mix(in srgb, var(--foil) 70%, transparent);
-}
-
-.lyric-title {
-  margin: 0;
-  font-size: 1.15rem;
-  color: var(--fg);
-}
-
-.lyric-artist,
-.lyric-source {
-  margin: 0.3rem 0 0;
-  color: var(--mute);
-  font-size: 0.85rem;
-}
-
-.lyric-source {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.lyric-body {
-  max-height: min(60vh, 560px);
-  overflow: auto;
-  padding-right: 0.25rem;
-}
-
-.lyric-line {
-  margin: 0.4rem 0;
-  line-height: 1.7;
-  color: var(--fg);
-}
-
-.lyric-line--trans {
-  color: var(--mute);
-  font-size: 0.92rem;
-}
-
-.lyric-hr {
-  border: 0;
-  border-top: 1px solid var(--border);
-  margin: 1rem 0 0.75rem;
-}
-
-.lyric-trans-label {
-  margin: 0 0 0.35rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.7rem;
-  letter-spacing: 0.2em;
-  color: var(--foil);
-}
-
 @keyframes wall-rise {
   from {
     opacity: 0;
@@ -558,26 +464,5 @@ onUnmounted(() => {
   .wall-cover {
     transition: none;
   }
-}
-</style>
-
-<style>
-.lyric-drawer .ant-drawer-content {
-  background: var(--surface) !important;
-  color: var(--fg);
-}
-
-.lyric-drawer .ant-drawer-header {
-  background: var(--surface) !important;
-  border-bottom: 1px solid var(--border) !important;
-}
-
-.lyric-drawer .ant-drawer-title,
-.lyric-drawer .ant-drawer-close {
-  color: var(--fg) !important;
-}
-
-.lyric-drawer .ant-drawer-body {
-  background: var(--surface);
 }
 </style>
