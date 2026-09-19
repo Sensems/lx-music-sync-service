@@ -134,14 +134,21 @@ async function press(hit: SearchHit) {
           </span>
         </span>
         <div class="flex flex-wrap gap-2 justify-end max-w-[14rem] sm:max-w-none">
-          <button type="button" class="search-row-btn" @click="onPlay(h)">播放</button>
-          <button type="button" class="search-row-btn" @click="onEnqueue(h)">加入队列</button>
+          <button type="button" class="search-row-btn" @click="onPlay(h)">
+            <span class="i-lucide-play" aria-hidden="true" />
+            播放
+          </button>
+          <button type="button" class="search-row-btn" @click="onEnqueue(h)">
+            <span class="i-lucide-list-plus" aria-hidden="true" />
+            加入队列
+          </button>
           <a-button
             type="primary"
-            class="stamp !text-ink !h-auto !px-2 !py-0.5 !text-xs sm:!text-sm"
+            class="stamp !text-ink !h-auto !px-2 !py-0.5 !text-xs sm:!text-sm !inline-flex !items-center !gap-1"
             :loading="pressing === h.songKey"
             @click="press(h)"
           >
+            <span v-if="pressing !== h.songKey" class="i-lucide-download" aria-hidden="true" />
             下载到本地
           </a-button>
         </div>
@@ -157,16 +164,19 @@ async function press(hit: SearchHit) {
 
 <style scoped>
 .search-row-btn {
-  padding: 0;
+  appearance: none;
+  padding: 0.2rem 0.25rem;
   border: 0;
   background: transparent;
   color: inherit;
   font: inherit;
   font-size: 0.75rem;
   cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  min-height: 2.5rem;
 }
 
 @media (min-width: 640px) {

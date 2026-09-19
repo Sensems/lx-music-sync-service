@@ -196,10 +196,12 @@ onMounted(() => {
                 class="wall-cover-actions"
                 @click.stop
               >
-                <button type="button" class="wall-cover-actions__btn" @click.stop="onPlay(song)">
+                <button type="button" class="wall-cover-actions__btn wall-cover-actions__btn--play" @click.stop="onPlay(song)">
+                  <span class="i-lucide-play" aria-hidden="true" />
                   播放
                 </button>
                 <button type="button" class="wall-cover-actions__btn" @click.stop="onEnqueue(song)">
+                  <span class="i-lucide-list-plus" aria-hidden="true" />
                   加入队列
                 </button>
               </div>
@@ -369,17 +371,35 @@ onMounted(() => {
   background: var(--surface);
   color: var(--fg);
   font-size: 0.78rem;
-  padding: 0.35rem 0.75rem;
+  padding: 0.4rem 0.7rem;
   cursor: pointer;
-  min-width: 5.5rem;
+  min-width: 6.4rem;
+  min-height: 2.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
   transition:
     border-color 0.2s ease,
-    color 0.2s ease;
+    color 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.wall-cover-actions__btn--play {
+  background: var(--foil);
+  border-color: var(--foil);
+  color: var(--ink);
 }
 
 .wall-cover-actions__btn:hover {
   border-color: var(--foil);
   color: var(--foil);
+}
+
+.wall-cover-actions__btn--play:hover {
+  background: var(--tungsten);
+  border-color: var(--tungsten);
+  color: var(--ink);
 }
 
 .wall-card:hover .wall-cover,

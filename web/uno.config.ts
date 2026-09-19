@@ -1,4 +1,8 @@
+import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineConfig, presetAttributify, presetIcons, presetUno } from 'unocss'
+
+const webRoot = dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
   presets: [
@@ -6,6 +10,11 @@ export default defineConfig({
     presetAttributify(),
     presetIcons({
       scale: 1.15,
+      // 从仓库根跑 npm --prefix web 时 cwd 不在 web/，不指定会找不到 lucide
+      collectionsNodeResolvePath: webRoot,
+      collections: {
+        lucide: () => import('@iconify-json/lucide/icons.json').then((mod) => mod.default),
+      },
       extraProperties: {
         'display': 'inline-block',
         'vertical-align': 'middle',

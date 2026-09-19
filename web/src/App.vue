@@ -10,7 +10,7 @@ import { computed } from 'vue'
 
 const { antTheme } = useTheme()
 const player = usePlayer()
-const mainPad = computed(() => (player.current.value ? 'pb-44' : 'pb-28'))
+const mainPad = computed(() => (player.current.value ? 'pb-52' : 'pb-28'))
 </script>
 
 <template>

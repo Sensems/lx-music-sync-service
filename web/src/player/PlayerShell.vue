@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { usePlayer } from './usePlayer'
+import PlayerSleeve from './PlayerSleeve.vue'
 import type { LoopMode } from './types'
 
 const {
@@ -37,6 +38,9 @@ const {
   removeAt,
 } = usePlayer()
 
+const showVol = ref(false)
+const lyricsEl = ref<HTMLElement | null>(null)
+
 const canSkip = computed(() => queue.value.length >= 2)
 
 const progressMax = computed(() => {
@@ -44,11 +48,13 @@ const progressMax = computed(() => {
   return d > 0 && Number.isFinite(d) ? d : 0
 })
 
-const timeLabel = computed(() => {
-  const cur = formatTime(currentTime.value)
-  const total = progressMax.value > 0 ? formatTime(progressMax.value) : '--:--'
-  return `${cur} / ${total}`
+const progressPct = computed(() => {
+  if (progressMax.value <= 0) return '0%'
+  const p = (currentTime.value / progressMax.value) * 100
+  return `${Math.min(100, Math.max(0, p))}%`
 })
+
+const volumePct = computed(() => `${(muted.value ? 0 : volume.value) * 100}%`)
 
 const loopLabel = computed(() => {
   if (loop.value === 'one') return '单曲'
@@ -56,17 +62,54 @@ const loopLabel = computed(() => {
   return '顺序'
 })
 
+const carLyrics = computed(() => {
+  const lines = lyricLines.value
+  const textAt = (i: number) => {
+    if (i < 0 || i >= lines.length) return ' '
+    return lines[i]?.text || ' '
+  }
+  if (lines.length === 0) {
+    return { prev: ' ', now: '暂无歌词', next: ' ' }
+  }
+  const i = lyricIndex.value
+  if (i < 0) {
+    return { prev: ' ', now: textAt(0), next: textAt(1) }
+  }
+  return { prev: textAt(i - 1), now: textAt(i), next: textAt(i + 1) }
+})
+
 watch(error, (msg) => {
   if (msg) message.error(msg)
 })
 
-watch(lyricIndex, async (i) => {
-  if (i < 0) return
-  await nextTick()
-  const el = document.querySelector(`[data-lyric-line="${i}"]`)
-  if (el instanceof HTMLElement) {
-    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }
+function scrollActiveLyric(smooth = true) {
+  if (!expanded.value || carMode.value) return
+  const root = lyricsEl.value
+  const i = lyricIndex.value
+  if (!root || i < 0) return
+  const el = root.querySelector(`[data-lyric-line="${i}"]`)
+  if (!(el instanceof HTMLElement)) return
+  // offsetTop 相对的是 position:relative 的播放页，不是歌词滚动区
+  const rootRect = root.getBoundingClientRect()
+  const elRect = el.getBoundingClientRect()
+  const top =
+    root.scrollTop + (elRect.top + elRect.height / 2) - (rootRect.top + root.clientHeight / 2)
+  root.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' })
+}
+
+function queueLyricScroll(smooth: boolean) {
+  void nextTick(() => {
+    requestAnimationFrame(() => scrollActiveLyric(smooth))
+  })
+}
+
+watch(lyricIndex, () => {
+  queueLyricScroll(true)
+})
+
+watch([expanded, carMode], ([exp, car]) => {
+  if (!exp || car) return
+  queueLyricScroll(false)
 })
 
 function formatTime(sec: number): string {
@@ -93,469 +136,1316 @@ function cycleLoop() {
   setLoop(order[(i + 1) % order.length]!)
 }
 
+function toggleExpand() {
+  showVol.value = false
+  if (expanded.value) collapse()
+  else expand()
+}
+
+function toggleVol() {
+  showQueue.value = false
+  showVol.value = !showVol.value
+}
+
 function toggleQueue() {
+  showVol.value = false
   showQueue.value = !showQueue.value
 }
 
 function onCarToggle() {
   if (carMode.value) exitCar()
-  else enterCar()
+  else {
+    showQueue.value = false
+    showVol.value = false
+    enterCar()
+  }
 }
 
-function onFullBack() {
-  if (carMode.value) exitCar()
-  else collapse()
+function onKey(ev: KeyboardEvent) {
+  if (ev.key !== 'Escape') return
+  if (showQueue.value) {
+    showQueue.value = false
+    return
+  }
+  if (showVol.value) {
+    showVol.value = false
+    return
+  }
+  if (carMode.value) {
+    exitCar()
+    return
+  }
+  if (expanded.value) collapse()
 }
+
+function onPointerDown(ev: PointerEvent) {
+  if (!showVol.value) return
+  const t = ev.target
+  if (t instanceof Node) {
+    const root = document.querySelector('.player-bar__vol')
+    if (root?.contains(t)) return
+  }
+  showVol.value = false
+}
+
+watch(
+  [expanded, carMode],
+  ([exp, car]) => {
+    document.documentElement.classList.toggle('player-lock-scroll', exp || car)
+  },
+  { immediate: true },
+)
+
+onMounted(() => {
+  window.addEventListener('keydown', onKey)
+  window.addEventListener('pointerdown', onPointerDown, true)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKey)
+  window.removeEventListener('pointerdown', onPointerDown, true)
+  document.documentElement.classList.remove('player-lock-scroll')
+})
 </script>
 
 <template>
   <template v-if="current">
-    <!-- 底条：未展开时显示，叠在任务条上方 -->
+    <!-- 歌曲详情：盖住页面，底栏仍留着（网易云桌面端交互） -->
     <div
-      v-if="!expanded"
-      class="player-bar fixed left-0 right-0 z-30 border-0 border-t border-solid border-border bg-surface/95 cursor-pointer"
-      role="button"
-      tabindex="0"
-      aria-label="展开播放器"
-      @click="expand"
-      @keydown.enter.prevent="expand"
-      @keydown.space.prevent="expand"
+      v-if="expanded && !carMode"
+      class="player-now"
+      role="dialog"
+      aria-modal="true"
+      aria-label="正在播放"
     >
-      <input
-        class="player-bar__progress"
-        type="range"
-        min="0"
-        :max="progressMax || 1"
-        step="0.1"
-        :value="currentTime"
-        :disabled="progressMax <= 0"
-        aria-label="播放进度"
-        @click.stop
-        @input="onSeek"
+      <div
+        class="player-now__bg"
+        :style="current.picUrl ? { backgroundImage: `url(${current.picUrl})` } : undefined"
+        aria-hidden="true"
       />
-      <div class="player-bar__row px-3 md:px-6 flex items-center gap-3">
-        <div class="player-bar__meta flex items-center gap-3 min-w-0 flex-1">
-          <div class="player-bar__cover shrink-0 overflow-hidden bg-elevated">
-            <img v-if="current.picUrl" :src="current.picUrl" :alt="current.name" class="w-full h-full object-cover" />
-            <span v-else class="i-lucide-disc-3 text-mute text-lg" aria-hidden="true" />
-          </div>
-          <div class="min-w-0">
-            <p class="m-0 text-sm text-fg truncate">{{ current.name }}</p>
-            <p class="m-0 text-xs text-mute truncate">{{ current.singer }}</p>
-            <p v-if="error" class="m-0 text-xs text-rec truncate">{{ error }}</p>
+      <div class="player-now__shade" aria-hidden="true" />
+
+      <div class="player-now__head">
+        <span class="player-now__head-spacer" />
+        <button type="button" class="player-now__fold" aria-label="收起" @click="collapse">
+          <span class="i-lucide-chevron-down text-xl" aria-hidden="true" />
+        </button>
+        <button type="button" class="player-now__car" @click="onCarToggle">
+          <span class="i-lucide-car-front text-lg" aria-hidden="true" />
+          车载
+        </button>
+      </div>
+
+      <div class="player-now__body">
+        <div class="player-now__disc">
+          <PlayerSleeve variant="disc" :pic-url="current.picUrl" :name="current.name" :playing="playing" />
+          <div class="player-now__modes">
+            <button
+              type="button"
+              class="player-ctrl"
+              :class="loop !== 'off' ? 'is-on' : ''"
+              :aria-label="`循环：${loopLabel}`"
+              @click="cycleLoop"
+            >
+              <span v-if="loop === 'one'" class="i-lucide-repeat-1" aria-hidden="true" />
+              <span v-else-if="loop === 'all'" class="i-lucide-repeat" aria-hidden="true" />
+              <span v-else class="i-lucide-list-ordered" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              class="player-ctrl"
+              :class="shuffle ? 'is-on' : ''"
+              aria-label="随机"
+              :aria-pressed="shuffle"
+              @click="setShuffle(!shuffle)"
+            >
+              <span class="i-lucide-shuffle" aria-hidden="true" />
+            </button>
           </div>
         </div>
-
-        <button
-          type="button"
-          class="stamp hit-44 rounded-full bg-foil text-ink shrink-0"
-          :aria-label="playing ? '暂停' : '播放'"
-          @click.stop="toggle"
-        >
-          <span :class="playing ? 'i-lucide-pause' : 'i-lucide-play'" aria-hidden="true" />
-        </button>
-
-        <div class="player-bar__right flex items-center gap-2 shrink-0" @click.stop>
-          <span class="font-mono text-xs text-mute hidden sm:inline">{{ timeLabel }}</span>
-          <button type="button" class="stamp hit-44 text-sm text-foil px-2" @click="expand">
-            展开
-          </button>
+        <div class="player-now__lyric-col">
+          <h2 class="player-now__title">{{ current.name }}</h2>
+          <p class="player-now__artist">{{ current.singer }}</p>
+          <p v-if="error" class="player-now__err">
+            <span class="i-lucide-circle-alert" aria-hidden="true" />
+            {{ error }}
+          </p>
+          <div ref="lyricsEl" class="player-now__lyrics">
+            <p v-if="lyricLines.length === 0" class="player-now__empty">暂无歌词</p>
+            <p
+              v-for="(line, i) in lyricLines"
+              :key="`${line.time}-${i}`"
+              :data-lyric-line="i"
+              class="player-now__line"
+              :class="i === lyricIndex ? 'is-now' : ''"
+            >
+              {{ line.text || ' ' }}
+            </p>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- 全屏播放器 -->
+    <!-- 车载：左右两栏 + 大歌词 + 进度，盖住底栏 -->
     <div
-      v-else-if="!carMode"
-      class="player-full fixed inset-0 z-40 bg-cabinet text-fg flex flex-col"
+      v-if="carMode"
+      class="player-car"
       role="dialog"
       aria-modal="true"
-      aria-label="全屏播放器"
+      aria-label="车载播放器"
     >
-      <header class="player-full__head flex items-center justify-between gap-3 px-4 md:px-8 pt-4 pb-2">
-        <button type="button" class="stamp hit-44 text-sm text-foil px-3" @click="onFullBack">返回</button>
-        <p class="m-0 text-sm text-mute truncate flex-1 text-center">{{ current.name }}</p>
-        <button type="button" class="stamp hit-44 text-sm text-foil px-3" @click="onCarToggle">车载</button>
+      <header class="player-car__head">
+        <button type="button" class="player-ctrl player-ctrl--label player-ctrl--lg" @click="exitCar">
+          <span class="i-lucide-chevron-down text-2xl" aria-hidden="true" />
+          返回
+        </button>
+        <button type="button" class="player-ctrl player-ctrl--label player-ctrl--lg is-on" @click="exitCar">
+          <span class="i-lucide-car-front text-xl" aria-hidden="true" />
+          车载
+        </button>
       </header>
-
-      <div class="player-full__body flex-1 min-h-0 px-4 md:px-10 pb-4 flex flex-col md:flex-row md:items-stretch gap-4 md:gap-8">
-        <div class="player-full__cover-wrap flex flex-col items-center gap-3 md:w-[38%] md:justify-center">
-          <div class="player-full__cover overflow-hidden bg-elevated">
-            <img v-if="current.picUrl" :src="current.picUrl" :alt="current.name" class="w-full h-full object-cover" />
-            <span v-else class="i-lucide-disc-3 text-mute text-5xl" aria-hidden="true" />
-          </div>
-          <div class="text-center max-w-full">
-            <h2 class="m-0 font-display text-xl md:text-2xl text-fg truncate">{{ current.name }}</h2>
-            <p class="m-0 mt-1 text-sm text-mute truncate">{{ current.singer }}</p>
-            <p v-if="error" class="m-0 mt-1 text-xs text-rec">{{ error }}</p>
+      <div class="player-car__body">
+        <div class="player-car__disc">
+          <PlayerSleeve variant="disc" :pic-url="current.picUrl" :name="current.name" :playing="playing" />
+          <div class="player-car__meta">
+            <h2 class="player-car__title">{{ current.name }}</h2>
+            <p class="player-car__artist">{{ current.singer }}</p>
           </div>
         </div>
-
-        <div class="player-full__lyrics flex-1 min-h-0 overflow-y-auto rounded-md bg-surface/40 px-3 py-4">
-          <p v-if="lyricLines.length === 0" class="m-0 text-sm text-mute text-center py-8">暂无歌词</p>
-          <p
-            v-for="(line, i) in lyricLines"
-            :key="`${line.time}-${i}`"
-            :data-lyric-line="i"
-            class="player-full__line m-0 py-1.5 text-center transition-colors"
-            :class="i === lyricIndex ? 'text-foil text-base md:text-lg font-medium' : 'text-mute text-sm'"
-          >
-            {{ line.text || ' ' }}
-          </p>
+        <div class="player-car__lyric-col" aria-live="polite">
+          <p class="player-car__line is-prev">{{ carLyrics.prev }}</p>
+          <p class="player-car__line is-now">{{ carLyrics.now }}</p>
+          <p class="player-car__line is-next">{{ carLyrics.next }}</p>
         </div>
       </div>
+      <div class="player-car__seek">
+        <span class="player-car__clock">{{ formatTime(currentTime) }}</span>
+        <input
+          class="player-groove player-groove--car"
+          type="range"
+          min="0"
+          :max="progressMax || 1"
+          step="0.1"
+          :value="currentTime"
+          :disabled="progressMax <= 0"
+          :style="{ '--p': progressPct }"
+          aria-label="播放进度"
+          @input="onSeek"
+        />
+        <span class="player-car__clock player-car__clock--end">{{
+          progressMax > 0 ? formatTime(progressMax) : '--:--'
+        }}</span>
+      </div>
+      <div class="player-car__controls">
+        <div class="player-car__transport">
+          <button type="button" class="player-ctrl player-car__btn" :disabled="!canSkip" aria-label="上一首" @click="prev">
+            <span class="i-lucide-skip-back" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            class="player-ctrl player-hub player-car__hub"
+            :aria-label="playing ? '暂停' : '播放'"
+            @click="toggle"
+          >
+            <span v-if="playing" class="i-lucide-pause" aria-hidden="true" />
+            <span v-else class="i-lucide-play player-hub__play" aria-hidden="true" />
+          </button>
+          <button type="button" class="player-ctrl player-car__btn" :disabled="!canSkip" aria-label="下一首" @click="next">
+            <span class="i-lucide-skip-forward" aria-hidden="true" />
+          </button>
+        </div>
+        <button
+          type="button"
+          class="player-ctrl player-car__btn player-car__queue-btn"
+          :class="showQueue ? 'is-on' : ''"
+          aria-label="播放列表"
+          :aria-expanded="showQueue"
+          @click="toggleQueue"
+        >
+          <span class="i-lucide-list-music" aria-hidden="true" />
+          <span class="player-bar__badge">{{ queue.length }}</span>
+        </button>
+      </div>
+    </div>
 
-      <footer class="player-full__foot px-4 md:px-10 pb-6 pt-2 border-0 border-t border-solid border-border bg-surface/80">
-        <div class="flex items-center gap-3 mb-3">
-          <span class="font-mono text-xs text-mute w-10 tabular-nums">{{ formatTime(currentTime) }}</span>
+    <!-- 底栏常驻 -->
+    <div v-if="!carMode" class="player-bar">
+      <div class="player-bar__left">
+        <button type="button" class="player-bar__cover" :aria-label="expanded ? '收起播放页' : '打开播放页'" @click="toggleExpand">
+          <PlayerSleeve variant="thumb" :pic-url="current.picUrl" :name="current.name" :open="expanded" />
+        </button>
+        <button type="button" class="player-bar__meta" @click="toggleExpand">
+          <span class="player-bar__name">{{ current.name }}</span>
+          <span class="player-bar__singer">{{ current.singer }}</span>
+          <span v-if="error" class="player-bar__err">{{ error }}</span>
+        </button>
+      </div>
+
+      <div class="player-bar__center">
+        <div class="player-bar__transport">
+          <button
+            type="button"
+            class="player-ctrl"
+            :class="loop !== 'off' ? 'is-on' : ''"
+            :aria-label="`循环：${loopLabel}`"
+            :title="`循环：${loopLabel}`"
+            @click="cycleLoop"
+          >
+            <span v-if="loop === 'one'" class="i-lucide-repeat-1" aria-hidden="true" />
+            <span v-else-if="loop === 'all'" class="i-lucide-repeat" aria-hidden="true" />
+            <span v-else class="i-lucide-list-ordered" aria-hidden="true" />
+          </button>
+          <button type="button" class="player-ctrl" :disabled="!canSkip" aria-label="上一首" @click="prev">
+            <span class="i-lucide-skip-back text-lg" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            class="player-ctrl player-hub"
+            :aria-label="playing ? '暂停' : '播放'"
+            @click="toggle"
+          >
+            <span v-if="playing" class="i-lucide-pause text-xl" aria-hidden="true" />
+            <span v-else class="i-lucide-play text-xl player-hub__play" aria-hidden="true" />
+          </button>
+          <button type="button" class="player-ctrl" :disabled="!canSkip" aria-label="下一首" @click="next">
+            <span class="i-lucide-skip-forward text-lg" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            class="player-ctrl"
+            :class="shuffle ? 'is-on' : ''"
+            aria-label="随机"
+            :aria-pressed="shuffle"
+            @click="setShuffle(!shuffle)"
+          >
+            <span class="i-lucide-shuffle" aria-hidden="true" />
+          </button>
+        </div>
+        <div class="player-bar__seek">
+          <span class="player-bar__clock">{{ formatTime(currentTime) }}</span>
           <input
-            class="player-full__progress flex-1"
+            class="player-groove"
             type="range"
             min="0"
             :max="progressMax || 1"
             step="0.1"
             :value="currentTime"
             :disabled="progressMax <= 0"
+            :style="{ '--p': progressPct }"
             aria-label="播放进度"
             @input="onSeek"
           />
-          <span class="font-mono text-xs text-mute w-10 text-right tabular-nums">{{
+          <span class="player-bar__clock player-bar__clock--end">{{
             progressMax > 0 ? formatTime(progressMax) : '--:--'
           }}</span>
         </div>
+      </div>
 
-        <div class="player-full__controls flex flex-wrap items-center justify-center gap-2 md:gap-3">
+      <div class="player-bar__right">
+        <button
+          type="button"
+          class="player-ctrl player-hub player-bar__mplay"
+          :aria-label="playing ? '暂停' : '播放'"
+          @click="toggle"
+        >
+          <span v-if="playing" class="i-lucide-pause text-xl" aria-hidden="true" />
+          <span v-else class="i-lucide-play text-xl player-hub__play" aria-hidden="true" />
+        </button>
+        <div class="player-bar__vol">
           <button
             type="button"
-            class="stamp hit-44 text-xs text-mute px-2"
-            :class="loop !== 'off' ? 'text-foil' : ''"
-            :title="`循环：${loopLabel}`"
-            @click="cycleLoop"
+            class="player-ctrl"
+            :aria-label="muted ? '取消静音' : '音量'"
+            :aria-expanded="showVol"
+            @click="toggleVol"
           >
-            <span v-if="loop === 'one'" class="i-lucide-repeat-1" aria-hidden="true" />
-            <span v-else class="i-lucide-repeat" aria-hidden="true" />
-            <span class="ml-1 hidden md:inline">{{ loopLabel }}</span>
+            <span v-if="muted || volume === 0" class="i-lucide-volume-x" aria-hidden="true" />
+            <span v-else-if="volume < 0.4" class="i-lucide-volume-1" aria-hidden="true" />
+            <span v-else class="i-lucide-volume-2" aria-hidden="true" />
           </button>
-
-          <button
-            type="button"
-            class="stamp hit-44 rounded-full text-fg"
-            :disabled="!canSkip"
-            aria-label="上一首"
-            @click="prev"
-          >
-            <span class="i-lucide-skip-back text-xl" aria-hidden="true" />
-          </button>
-
-          <button
-            type="button"
-            class="stamp hit-44 w-14 h-14 rounded-full bg-foil text-ink"
-            :aria-label="playing ? '暂停' : '播放'"
-            @click="toggle"
-          >
-            <span :class="playing ? 'i-lucide-pause text-2xl' : 'i-lucide-play text-2xl'" aria-hidden="true" />
-          </button>
-
-          <button
-            type="button"
-            class="stamp hit-44 rounded-full text-fg"
-            :disabled="!canSkip"
-            aria-label="下一首"
-            @click="next"
-          >
-            <span class="i-lucide-skip-forward text-xl" aria-hidden="true" />
-          </button>
-
-          <button
-            type="button"
-            class="stamp hit-44 text-xs px-2"
-            :class="shuffle ? 'text-foil' : 'text-mute'"
-            aria-label="随机"
-            @click="setShuffle(!shuffle)"
-          >
-            <span class="i-lucide-shuffle" aria-hidden="true" />
-            <span class="ml-1 hidden md:inline">随机</span>
-          </button>
-        </div>
-
-        <div class="player-full__extra mt-3 flex flex-wrap items-center justify-between gap-3">
-          <div class="player-full__volume hidden md:flex items-center gap-2 min-w-40">
-            <button
-              type="button"
-              class="stamp hit-44 text-mute"
-              :aria-label="muted ? '取消静音' : '静音'"
-              @click="toggleMute"
-            >
-              <span :class="muted || volume === 0 ? 'i-lucide-volume-x' : 'i-lucide-volume-2'" aria-hidden="true" />
-            </button>
+          <div v-if="showVol" class="player-bar__vol-pop" @click.stop>
             <input
-              class="player-full__vol-range flex-1"
+              class="player-groove player-groove--vol"
               type="range"
               min="0"
               max="1"
               step="0.01"
               :value="muted ? 0 : volume"
+              :style="{ '--p': volumePct }"
               aria-label="音量"
               @input="onVolume"
             />
           </div>
-
-          <details class="player-full__more md:hidden">
-            <summary class="stamp hit-44 text-sm text-foil list-none cursor-pointer px-2">更多</summary>
-            <div class="mt-2 flex items-center gap-2 p-2 bg-elevated rounded-md">
-              <button
-                type="button"
-                class="stamp hit-44 text-mute"
-                :aria-label="muted ? '取消静音' : '静音'"
-                @click="toggleMute"
-              >
-                <span :class="muted || volume === 0 ? 'i-lucide-volume-x' : 'i-lucide-volume-2'" aria-hidden="true" />
-              </button>
-              <input
-                class="player-full__vol-range flex-1"
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                :value="muted ? 0 : volume"
-                aria-label="音量"
-                @input="onVolume"
-              />
-            </div>
-          </details>
-
-          <button type="button" class="stamp hit-44 text-sm text-foil px-3" @click="toggleQueue">
-            队列 · {{ queue.length }}
-          </button>
         </div>
-      </footer>
-
-      <!-- 队列抽屉 -->
-      <aside
-        v-if="showQueue"
-        class="player-queue fixed inset-y-0 right-0 z-50 w-full max-w-sm bg-surface border-0 border-l border-solid border-border flex flex-col shadow-lg"
-        aria-label="播放队列"
-      >
-        <div class="flex items-center justify-between px-4 py-3 border-0 border-b border-solid border-border">
-          <h3 class="m-0 text-base text-fg">队列</h3>
-          <button type="button" class="stamp hit-44 text-sm text-mute px-2" @click="showQueue = false">关闭</button>
-        </div>
-        <ul class="m-0 p-0 list-none flex-1 overflow-y-auto">
-          <li
-            v-for="(item, i) in queue"
-            :key="`${item.songKey}-${i}`"
-            class="flex items-center gap-2 px-3 py-2 border-0 border-b border-solid border-border/50"
-            :class="i === index ? 'bg-elevated' : ''"
-          >
-            <button
-              type="button"
-              class="stamp flex-1 min-w-0 text-left px-1 py-2"
-              @click="jumpTo(i)"
-            >
-              <span class="block text-sm truncate" :class="i === index ? 'text-foil' : 'text-fg'">{{ item.name }}</span>
-              <span class="block text-xs text-mute truncate">{{ item.singer }}</span>
-            </button>
-            <button
-              type="button"
-              class="stamp hit-44 text-mute shrink-0"
-              aria-label="移出队列"
-              @click="removeAt(i)"
-            >
-              <span class="i-lucide-x" aria-hidden="true" />
-            </button>
-          </li>
-        </ul>
-      </aside>
-      <div
-        v-if="showQueue"
-        class="fixed inset-0 z-40 bg-ink/40"
-        aria-hidden="true"
-        @click="showQueue = false"
-      />
+        <button
+          type="button"
+          class="player-ctrl player-bar__ci"
+          :class="expanded ? 'is-on' : ''"
+          aria-label="歌词"
+          :aria-pressed="expanded"
+          @click="toggleExpand"
+        >
+          词
+        </button>
+        <button
+          type="button"
+          class="player-ctrl player-bar__queue-btn"
+          :class="showQueue ? 'is-on' : ''"
+          aria-label="播放列表"
+          :aria-expanded="showQueue"
+          @click="toggleQueue"
+        >
+          <span class="i-lucide-list-music" aria-hidden="true" />
+          <span class="player-bar__badge">{{ queue.length }}</span>
+        </button>
+      </div>
     </div>
 
-    <!-- 车载模式 -->
-    <div
-      v-else
-      class="player-car fixed inset-0 z-40 bg-cabinet text-fg flex flex-col"
-      role="dialog"
-      aria-modal="true"
-      aria-label="车载播放器"
+    <aside
+      v-if="showQueue"
+      class="player-queue"
+      :class="carMode ? 'player-queue--car' : ''"
+      aria-label="播放列表"
     >
-      <header class="flex items-center justify-between gap-3 px-4 md:px-8 pt-4 pb-2">
-        <button type="button" class="stamp hit-44 text-base text-foil px-4" @click="exitCar">返回</button>
-        <button type="button" class="stamp hit-44 text-base text-foil px-4" @click="exitCar">车载</button>
-      </header>
-
-      <div class="flex-1 min-h-0 flex flex-col items-center justify-center gap-6 px-6">
-        <div class="player-car__cover overflow-hidden bg-elevated">
-          <img v-if="current.picUrl" :src="current.picUrl" :alt="current.name" class="w-full h-full object-cover" />
-          <span v-else class="i-lucide-disc-3 text-mute text-6xl" aria-hidden="true" />
-        </div>
-        <div class="text-center max-w-full">
-          <h2 class="m-0 font-display text-2xl md:text-3xl text-fg truncate">{{ current.name }}</h2>
-          <p class="m-0 mt-2 text-base text-mute truncate">{{ current.singer }}</p>
-        </div>
-
-        <div class="player-car__lyrics w-full max-w-lg text-center px-2 opacity-50">
-          <p v-if="lyricLines.length === 0" class="m-0 text-sm text-mute">暂无歌词</p>
-          <p v-else class="m-0 text-sm text-foil">
-            {{ lyricIndex >= 0 ? lyricLines[lyricIndex]?.text || ' ' : '…' }}
-          </p>
-        </div>
-      </div>
-
-      <div class="player-car__controls flex items-center justify-center gap-8 md:gap-14 pb-12 pt-4">
-        <button
-          type="button"
-          class="stamp player-car__btn rounded-full text-fg"
-          :disabled="!canSkip"
-          aria-label="上一首"
-          @click="prev"
-        >
-          <span class="i-lucide-skip-back" aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          class="stamp player-car__btn player-car__btn--main rounded-full bg-foil text-ink"
-          :aria-label="playing ? '暂停' : '播放'"
-          @click="toggle"
-        >
-          <span :class="playing ? 'i-lucide-pause' : 'i-lucide-play'" aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          class="stamp player-car__btn rounded-full text-fg"
-          :disabled="!canSkip"
-          aria-label="下一首"
-          @click="next"
-        >
-          <span class="i-lucide-skip-forward" aria-hidden="true" />
+      <div class="player-queue__head">
+        <h3 class="player-queue__title">播放列表 · {{ queue.length }}</h3>
+        <button type="button" class="player-ctrl" aria-label="关闭播放列表" @click="showQueue = false">
+          <span class="i-lucide-x" aria-hidden="true" />
         </button>
       </div>
-    </div>
+      <ul class="player-queue__list">
+        <li
+          v-for="(item, i) in queue"
+          :key="`${item.songKey}-${i}`"
+          class="player-queue__item"
+          :class="i === index ? 'is-current' : ''"
+        >
+          <button type="button" class="player-queue__jump" @click="jumpTo(i)">
+            <span v-if="i === index" class="i-lucide-volume-2 player-queue__now" aria-hidden="true" />
+            <span v-else class="player-queue__idx">{{ String(i + 1).padStart(2, '0') }}</span>
+            <span class="player-queue__meta">
+              <span class="player-queue__name">{{ item.name }}</span>
+              <span class="player-queue__singer">{{ item.singer }}</span>
+            </span>
+          </button>
+          <button type="button" class="player-ctrl player-ctrl--sm" aria-label="移出队列" @click="removeAt(i)">
+            <span class="i-lucide-x" aria-hidden="true" />
+          </button>
+        </li>
+      </ul>
+    </aside>
+    <div
+      v-if="showQueue"
+      class="player-queue__scrim"
+      :class="carMode ? 'player-queue__scrim--car' : ''"
+      aria-hidden="true"
+      @click="showQueue = false"
+    />
   </template>
 </template>
 
 <style scoped>
 .player-bar {
-  bottom: 3.25rem;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 45px;
+  z-index: 34;
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) minmax(18rem, 1.5fr) minmax(9rem, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 4.5rem;
+  padding: 0.45rem 1rem;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding-bottom: calc(0.45rem + env(safe-area-inset-bottom, 0));
 }
 
-.player-bar__progress,
-.player-full__progress,
-.player-full__vol-range {
-  appearance: none;
-  width: 100%;
-  height: 4px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--border) 80%, transparent);
-  outline: none;
-  cursor: pointer;
-}
-
-.player-bar__progress {
-  display: block;
-  margin: 0;
-  border-radius: 0;
-}
-
-.player-bar__progress::-webkit-slider-thumb,
-.player-full__progress::-webkit-slider-thumb,
-.player-full__vol-range::-webkit-slider-thumb {
-  appearance: none;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--foil);
-  border: none;
-  cursor: pointer;
-}
-
-.player-bar__progress::-moz-range-thumb,
-.player-full__progress::-moz-range-thumb,
-.player-full__vol-range::-moz-range-thumb {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--foil);
-  border: none;
-  cursor: pointer;
-}
-
-.player-bar__row {
-  min-height: 3.5rem;
-  padding-top: 0.35rem;
-  padding-bottom: 0.35rem;
+.player-bar__left {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-width: 0;
 }
 
 .player-bar__cover {
-  width: 2.5rem;
-  height: 2.5rem;
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
   border-radius: 0.25rem;
+}
+
+.player-bar__meta {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  min-width: 0;
+  text-align: left;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+
+.player-bar__name,
+.player-bar__singer,
+.player-bar__err {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-bar__name {
+  font-size: 0.88rem;
+  line-height: 1.3;
+  color: var(--fg);
+}
+
+.player-bar__singer {
+  font-size: 0.75rem;
+  color: var(--mute);
+}
+
+.player-bar__err {
+  font-size: 0.72rem;
+  color: var(--rec);
+}
+
+.player-bar__center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.player-bar__transport {
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 0.15rem;
 }
 
-.player-full__cover {
-  width: min(280px, 70vw);
-  height: min(280px, 70vw);
-  border-radius: 0.5rem;
+.player-bar__seek {
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 0.55rem;
+  width: 100%;
+  max-width: 26rem;
 }
 
-.player-car__cover {
-  width: min(220px, 55vw);
-  height: min(220px, 55vw);
-  border-radius: 0.75rem;
+.player-bar__clock {
+  width: 2.2rem;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.68rem;
+  color: var(--mute);
+  font-variant-numeric: tabular-nums;
+}
+
+.player-bar__clock--end {
+  text-align: right;
+}
+
+.player-bar__right {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
+  gap: 0.1rem;
 }
 
-.player-car__btn {
-  width: 4.5rem;
-  height: 4.5rem;
-  font-size: 1.75rem;
-}
-
-.player-car__btn--main {
-  width: 5.5rem;
-  height: 5.5rem;
-  font-size: 2.25rem;
-}
-
-.player-full__more > summary::-webkit-details-marker {
+.player-bar__mplay {
   display: none;
 }
 
+.player-bar__vol {
+  position: relative;
+}
+
+.player-bar__vol-pop {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.45rem);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.55rem;
+  height: 8.4rem;
+  padding: 0.7rem 0;
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  box-shadow: 0 10px 28px color-mix(in srgb, #000 32%, transparent);
+  transform: translateX(-50%);
+}
+
+.player-bar__ci {
+  font-size: 0.84rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.player-bar__queue-btn {
+  position: relative;
+}
+
+.player-bar__badge {
+  position: absolute;
+  top: 0.2rem;
+  right: 0.15rem;
+  min-width: 0.9rem;
+  padding: 0 0.2rem;
+  font-size: 0.6rem;
+  line-height: 1.1rem;
+  text-align: center;
+  border-radius: 999px;
+  background: var(--foil);
+  color: var(--ink);
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+}
+
+.player-groove {
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--foil) 0,
+    var(--foil) var(--p, 0%),
+    color-mix(in srgb, var(--border) 75%, transparent) var(--p, 0%)
+  );
+  outline: none;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.player-groove--vol {
+  width: 6.6rem;
+  height: 3px;
+  flex-shrink: 0;
+  transform: rotate(-90deg);
+}
+
+.player-groove::-webkit-slider-thumb {
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--foil);
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.player-groove:hover::-webkit-slider-thumb,
+.player-groove:focus-visible::-webkit-slider-thumb {
+  opacity: 1;
+  transform: scale(1.15);
+}
+
+.player-groove::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--foil);
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.player-groove:hover::-moz-range-thumb,
+.player-groove:focus-visible::-moz-range-thumb {
+  opacity: 1;
+}
+
+.player-groove--vol::-webkit-slider-thumb,
+.player-groove--vol::-moz-range-thumb {
+  opacity: 1;
+}
+
+.player-ctrl {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-width: 2.5rem;
+  min-height: 2.5rem;
+  padding: 0;
+  border-radius: 999px;
+  font: inherit;
+  touch-action: manipulation;
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease,
+    transform 0.15s ease,
+    opacity 0.18s ease;
+}
+
+.player-ctrl:hover {
+  color: var(--foil);
+}
+
+.player-ctrl:active {
+  transform: scale(0.94);
+}
+
+.player-ctrl:disabled {
+  opacity: 0.28;
+  cursor: not-allowed;
+}
+
+.player-ctrl:disabled:hover {
+  color: var(--fg);
+}
+
+.player-ctrl.is-on {
+  color: var(--foil);
+}
+
+.player-ctrl--label {
+  padding: 0 0.7rem;
+  font-size: 0.85rem;
+}
+
+.player-ctrl--lg {
+  min-height: 3rem;
+  font-size: 1rem;
+  padding: 0 1rem;
+}
+
+.player-ctrl--sm {
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+}
+
+.player-hub {
+  width: 2.35rem;
+  height: 2.35rem;
+  min-width: 2.35rem;
+  border: 2px solid var(--fg);
+  color: var(--fg);
+}
+
+.player-hub:hover {
+  border-color: var(--foil);
+  color: var(--foil);
+  background: transparent;
+}
+
+.player-hub__play {
+  margin-left: 2px;
+}
+
+.player-ctrl.player-bar__mplay {
+  display: none;
+}
+
+.player-now {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: calc(45px + 4.5rem);
+  z-index: 31;
+  display: flex;
+  flex-direction: column;
+  overflow: clip;
+  animation: player-now-in 0.28s ease-out;
+  padding-top: env(safe-area-inset-top, 0);
+  background: var(--cabinet);
+}
+
+.player-now__bg {
+  position: absolute;
+  inset: 0;
+  background: var(--cabinet) center / cover no-repeat;
+  filter: blur(60px) saturate(1.2);
+  transform: scale(1.12);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.player-now__shade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    color-mix(in srgb, var(--cabinet) 82%, transparent),
+    color-mix(in srgb, #000 28%, transparent);
+}
+
+.player-now__head {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 0.35rem 0.75rem 0;
+}
+
+.player-now__head-spacer {
+  justify-self: start;
+}
+
+.player-now__fold,
+.player-now__car {
+  appearance: none;
+  border: 0;
+  background: color-mix(in srgb, var(--fg) 14%, transparent);
+  color: var(--fg);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-height: 2.5rem;
+  min-width: 2.5rem;
+  padding: 0 0.85rem;
+  border-radius: 999px;
+}
+
+.player-now__fold {
+  grid-column: 2;
+}
+
+.player-now__car {
+  grid-column: 3;
+  justify-self: end;
+  font-size: 0.85rem;
+}
+
+.player-now__fold:hover,
+.player-now__car:hover {
+  color: var(--foil);
+}
+
+.player-now__body {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  gap: 4.5rem;
+  padding: 1.25rem 6vw 2rem;
+}
+
+.player-now__disc {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 1rem;
+}
+
+.player-now__modes {
+  display: none;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.player-now__lyric-col {
+  flex: 1;
+  min-width: 0;
+  max-width: 32rem;
+  height: min(32rem, 70vh);
+  display: flex;
+  flex-direction: column;
+}
+
+.player-now__title {
+  margin: 0;
+  font-size: 1.45rem;
+  font-weight: 500;
+  text-align: center;
+}
+
+.player-now__artist {
+  margin: 0.45rem 0 1rem;
+  text-align: center;
+  color: var(--mute);
+  font-size: 0.9rem;
+}
+
+.player-now__err {
+  margin: 0 0 0.75rem;
+  text-align: center;
+  color: var(--rec);
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+}
+
+.player-now__lyrics {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  mask-image: linear-gradient(to bottom, transparent, #000 12%, #000 88%, transparent);
+  padding: 1.5rem 0.5rem;
+}
+
+.player-now__empty {
+  margin: 3rem 0 0;
+  text-align: center;
+  color: var(--mute);
+}
+
+.player-now__line {
+  margin: 0;
+  padding: 0.55rem 0.4rem;
+  text-align: center;
+  font-size: 0.95rem;
+  line-height: 1.7;
+  color: color-mix(in srgb, var(--fg) 42%, transparent);
+  transition: color 0.2s ease, font-size 0.2s ease;
+}
+
+.player-now__line.is-now {
+  color: var(--fg);
+  font-size: 1.2rem;
+  font-weight: 500;
+}
+
+.player-queue {
+  position: fixed;
+  right: 0.75rem;
+  bottom: calc(45px + 4.5rem + 0.5rem);
+  z-index: 36;
+  width: min(22rem, calc(100vw - 1.5rem));
+  height: min(26rem, 58vh);
+  display: flex;
+  flex-direction: column;
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  box-shadow: 0 16px 48px color-mix(in srgb, #000 38%, transparent);
+  animation: player-pop 0.2s ease-out;
+}
+
+.player-queue__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  background: transparent;
+}
+
+.player-queue--car {
+  z-index: 42;
+  bottom: calc(10.75rem + env(safe-area-inset-bottom, 0));
+}
+
+.player-queue__scrim--car {
+  z-index: 41;
+}
+
+.player-queue__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.45rem 0.55rem 0.45rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.player-queue__title {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.player-queue__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.player-queue__item {
+  display: flex;
+  align-items: center;
+  padding: 0 0.3rem;
+}
+
+.player-queue__item.is-current {
+  background: color-mix(in srgb, var(--foil) 12%, transparent);
+}
+
+.player-queue__jump {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.55rem 0.4rem;
+  text-align: left;
+}
+
+.player-queue__idx {
+  width: 1.35rem;
+  flex-shrink: 0;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.68rem;
+  color: var(--mute);
+}
+
+.player-queue__now {
+  color: var(--foil);
+  flex-shrink: 0;
+}
+
+.player-queue__meta {
+  min-width: 0;
+}
+
+.player-queue__name,
+.player-queue__singer {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-queue__name {
+  font-size: 0.86rem;
+}
+
+.player-queue__item.is-current .player-queue__name {
+  color: var(--foil);
+}
+
+.player-queue__singer {
+  margin-top: 0.12rem;
+  font-size: 0.72rem;
+  color: var(--mute);
+}
+
+.player-car {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  overflow: clip;
+  background: var(--cabinet);
+  color: var(--fg);
+  overscroll-behavior: contain;
+  animation: player-now-in 0.28s ease-out;
+  padding-top: env(safe-area-inset-top, 0);
+}
+
+.player-car__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 0.75rem;
+  flex-shrink: 0;
+}
+
+.player-car__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  gap: 4.5rem;
+  padding: 0.5rem 6vw 0.75rem;
+}
+
+.player-car__disc {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.15rem;
+  min-width: 0;
+}
+
+.player-car__meta {
+  text-align: center;
+  max-width: 100%;
+}
+
+.player-car__title {
+  margin: 0;
+  font-size: clamp(1.4rem, 3.2vw, 2rem);
+  font-weight: 500;
+}
+
+.player-car__artist {
+  margin: 0.4rem 0 0;
+  font-size: 1.05rem;
+  color: var(--mute);
+}
+
+.player-car__lyric-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 1.15rem;
+  text-align: center;
+}
+
+.player-car__line {
+  margin: 0;
+  max-width: 100%;
+  line-height: 1.45;
+}
+
+.player-car__line.is-prev,
+.player-car__line.is-next {
+  font-size: clamp(1.25rem, 2.7vw, 1.8rem);
+  color: var(--mute);
+}
+
+.player-car__line.is-now {
+  font-size: clamp(1.85rem, 4vw, 2.7rem);
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.player-car__seek {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  width: calc(100% - 12vw);
+  margin: 0 auto;
+  padding: 0.35rem 0 0.15rem;
+  flex-shrink: 0;
+}
+
+.player-car__clock {
+  width: 3.1rem;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.9rem;
+  color: var(--mute);
+  font-variant-numeric: tabular-nums;
+}
+
+.player-car__clock--end {
+  text-align: right;
+}
+
+.player-groove--car {
+  height: 5px;
+}
+
+.player-groove--car::-webkit-slider-thumb {
+  opacity: 1;
+  width: 14px;
+  height: 14px;
+}
+
+.player-groove--car::-moz-range-thumb {
+  opacity: 1;
+  width: 14px;
+  height: 14px;
+}
+
+.player-car__controls {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 0.75rem 4vw calc(1.5rem + env(safe-area-inset-bottom, 0));
+  flex-shrink: 0;
+}
+
+.player-car__transport {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.75rem;
+}
+
+.player-car__queue-btn {
+  grid-column: 3;
+  justify-self: end;
+  position: relative;
+}
+
+.player-car__queue-btn .player-bar__badge {
+  top: 0.45rem;
+  right: 0.45rem;
+  min-width: 1.1rem;
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+}
+
+.player-car__btn {
+  width: 4.6rem;
+  height: 4.6rem;
+  min-width: 4.6rem;
+  font-size: 1.85rem;
+  border: 1px solid var(--border);
+  background: var(--elevated);
+}
+
+.player-car__hub {
+  width: 5.6rem;
+  height: 5.6rem;
+  min-width: 5.6rem;
+  min-height: 5.6rem;
+  font-size: 2.2rem;
+  border-width: 3px;
+}
+
+@keyframes player-now-in {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes player-pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @media (max-width: 767px) {
-  .player-bar__row {
-    min-height: 3rem;
-    padding-top: 0.2rem;
-    padding-bottom: 0.2rem;
+  .player-bar {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      'seek seek'
+      'left right';
+    gap: 0.15rem 0.5rem;
+    min-height: 4.75rem;
+    padding: 0.3rem 0.7rem 0.4rem;
   }
 
-  .player-bar__cover {
-    width: 2.25rem;
-    height: 2.25rem;
+  .player-bar__center {
+    grid-area: seek;
+    flex-direction: column-reverse;
   }
 
-  .player-full__body {
+  .player-bar__transport {
+    display: none;
+  }
+
+  .player-bar__left {
+    grid-area: left;
+  }
+
+  .player-bar__right {
+    grid-area: right;
+  }
+
+  .player-ctrl.player-bar__mplay {
+    display: inline-flex;
+  }
+
+  .player-bar__ci {
+    display: none;
+  }
+
+  .player-now__body {
     flex-direction: column;
+    gap: 1rem;
+    padding: 0.5rem 1.25rem 1rem;
+    align-items: center;
   }
 
-  .player-full__cover {
-    width: min(160px, 42vw);
-    height: min(160px, 42vw);
+  .player-bar__seek {
+    max-width: none;
   }
 
-  .player-full__controls .stamp {
-    min-width: 2.75rem;
-    min-height: 2.75rem;
+  .player-now {
+    bottom: calc(45px + 4.75rem);
+  }
+
+  .player-now__modes {
+    display: flex;
+  }
+
+  .player-now__lyric-col {
+    width: 100%;
+    max-width: none;
+    height: auto;
+    flex: 1;
+  }
+
+  .player-queue {
+    right: 0.4rem;
+    left: 0.4rem;
+    width: auto;
+    bottom: calc(45px + 4.75rem + 0.4rem);
+  }
+
+  .player-car__body {
+    flex-direction: column;
+    gap: 1rem;
+    padding: 0.35rem 1.25rem 0.5rem;
+  }
+
+  .player-car__lyric-col {
+    flex: 1;
+    width: 100%;
+    gap: 0.7rem;
+  }
+
+  .player-car__seek {
+    width: calc(100% - 2.5rem);
+  }
+
+  .player-queue--car {
+    bottom: calc(10.25rem + env(safe-area-inset-bottom, 0));
+  }
+}
+
+@media (min-width: 768px) {
+  .player-bar {
+    padding-left: 1.25rem;
+    padding-right: 1.25rem;
+  }
+
+  .player-bar .player-hub {
+    width: 2.15rem;
+    height: 2.15rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-now,
+  .player-car,
+  .player-queue {
+    animation: none;
+  }
+
+  .player-ctrl,
+  .player-groove::-webkit-slider-thumb {
+    transition: none;
   }
 }
 </style>

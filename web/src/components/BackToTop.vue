@@ -5,7 +5,8 @@ import { usePlayer } from '../player/usePlayer'
 const visible = ref(false)
 const THRESHOLD = 320
 const player = usePlayer()
-const raised = computed(() => !!player.current.value)
+const raised = computed(() => !!player.current.value && !player.expanded.value && !player.carMode.value)
+const hidden = computed(() => player.expanded.value || player.carMode.value)
 
 function onScroll() {
   visible.value = window.scrollY > THRESHOLD
@@ -29,7 +30,7 @@ onUnmounted(() => {
 <template>
   <Transition name="back-top">
     <button
-      v-if="visible"
+      v-if="visible && !hidden"
       type="button"
       class="back-top"
       :class="{ 'back-top--raised': raised }"
@@ -37,7 +38,7 @@ onUnmounted(() => {
       title="回到顶部"
       @click="goTop"
     >
-      <span class="back-top__icon" aria-hidden="true">↑</span>
+      <span class="i-lucide-chevron-up text-xl" aria-hidden="true" />
     </button>
   </Transition>
 </template>
@@ -69,12 +70,6 @@ onUnmounted(() => {
   border-color: var(--foil);
   color: var(--foil);
   transform: translateY(-2px);
-}
-
-.back-top__icon {
-  font-size: 1.15rem;
-  line-height: 1;
-  font-weight: 500;
 }
 
 .back-top-enter-active,

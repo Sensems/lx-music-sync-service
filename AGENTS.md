@@ -13,7 +13,7 @@
 
 ```bash
 npm install                  # 安装依赖（有 pnpm-lock.yaml，装了 pnpm 时也可 pnpm install）
-npm test                     # Vitest，test/ 全部用例；提交前必跑
+npm test                     # Vitest，现有 test/ 用例；不必为新改动补测
 npm run dev                  # tsx watch src/cli.ts serve，后端开发
 npm run build                # 仅类型检查（tsconfig 是 noEmit）
 npm --prefix web run dev     # 前端 dev server，5173，/api 代理到 8787
@@ -22,7 +22,7 @@ node bin/lx-sync.mjs serve   # 生产启动方式（等价 npm start）
 ./scripts/deploy.sh          # 服务器一键部署 / 更新（PM2）
 ```
 
-需要跑单个用例时用 `npx vitest run test/sync.test.ts`。当前基线：12 个测试文件、39 个用例全绿。
+需要跑单个现有用例时用 `npx vitest run test/sync.test.ts`。
 
 ## 代码地图
 
@@ -63,14 +63,13 @@ node bin/lx-sync.mjs serve   # 生产启动方式（等价 npm start）
 
 ## 测试要求
 
-- 改了行为就补或改用例，测试放在 `test/<模块>.test.ts`，用 Vitest；跑 `npm test` 必须全绿再交付。
-- 测 HTTP 用 `createApp(ctx)` 直接打 `app.fetch`（见 `test/http.test.ts`），不要真的监听端口。
-- 测同步/下载用假的 `getMusicUrl`、`downloadFile`、`getListDetail` 依赖注入（见 `test/sync.test.ts`、`test/refreshPlaylist.test.ts`），不要访问真实平台。
-- 涉及前端改动时，`npm --prefix web run build` 会跑 `vue-tsc`，用它做类型验证。
+- **不要写单元测试**：改行为、修 bug、加功能时不要新增或扩写 `test/*.test.ts`，也不要为了 TDD 先写失败用例。用户明确要求补测时才写。
+- 仓库里已有的 Vitest 用例可以保留；不要为了配合新代码去大改测试，除非现有测试挡住了交付且用户同意改。
+- 涉及前端改动时，用 `npm --prefix web run build`（含 `vue-tsc`）做类型验证即可。
 
 ## 变更流程
 
-- 分支用 `codex/` 前缀，例如 `codex/fix-resume-check`。
+- **直接在 `main` 上改**：之后改代码、修 bug、加功能都在 `main` 检出里做，**不要**再建 git worktree、也不要为隔离工作区切新分支。用户明确要求开分支或 PR 时除外。
 - 提交信息沿用现有风格：`feat: …` / `fix: …` / `chore: …`，一行摘要，必要时正文说明动机。
 - 提交前确认工作区没有混入 `config.yaml`、`data/`、`web/dist/` 之类的未跟踪产物。
 - 不要用破坏性命令（`git reset --hard`、`git checkout --`）处理他人改动。

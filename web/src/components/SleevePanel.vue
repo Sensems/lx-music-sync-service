@@ -67,10 +67,11 @@ function onEnqueueTrack(t: Track) {
           <span>{{ playlist.enabled ? '加入定时同步' : '暂停定时' }}</span>
         </label>
         <a-button
-          class="stamp !h-11 !px-5 !text-ink"
+          class="stamp !h-11 !px-5 !text-ink !inline-flex !items-center !gap-1.5"
           :disabled="!tracks.length"
           @click="onPlayPlaylist"
         >
+          <span class="i-lucide-list-music" aria-hidden="true" />
           播放歌单
         </a-button>
         <a-button type="primary" class="stamp !h-11 !px-5 !text-ink" :loading="props.syncing" @click="press">
@@ -96,8 +97,14 @@ function onEnqueueTrack(t: Track) {
             <span v-else class="text-rec">未下载</span>
           </span>
           <span class="flex gap-2">
-            <button type="button" class="sleeve-row-btn" @click="onPlayTrack(t)">播放</button>
-            <button type="button" class="sleeve-row-btn" @click="onEnqueueTrack(t)">加入队列</button>
+            <button type="button" class="sleeve-row-btn" @click="onPlayTrack(t)">
+              <span class="i-lucide-play" aria-hidden="true" />
+              播放
+            </button>
+            <button type="button" class="sleeve-row-btn" @click="onEnqueueTrack(t)">
+              <span class="i-lucide-list-plus" aria-hidden="true" />
+              加入队列
+            </button>
           </span>
         </div>
       </li>
@@ -108,15 +115,18 @@ function onEnqueueTrack(t: Track) {
 
 <style scoped>
 .sleeve-row-btn {
-  padding: 0;
+  appearance: none;
+  padding: 0.15rem 0.25rem;
   border: 0;
   background: transparent;
   color: inherit;
   font: inherit;
   font-size: inherit;
   cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  min-height: 2.5rem;
 }
 
 .sleeve-row-btn:hover {

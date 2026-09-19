@@ -73,8 +73,14 @@ body {
   background: transparent;
 }
 
-html {
+/* html {
   scrollbar-gutter: stable;
+} */
+
+html.player-lock-scroll,
+html.player-lock-scroll body {
+  overflow: hidden;
+  scrollbar-gutter: auto;
 }
 
 @media (prefers-reduced-motion: reduce) {
