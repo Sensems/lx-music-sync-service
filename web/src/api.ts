@@ -54,6 +54,27 @@ export const api = {
       if (!r.ok) throw new Error(body.error || '歌词获取失败')
       return body
     }),
+  rememberStream: (musicInfo: unknown) =>
+    fetch('/api/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ musicInfo }),
+    }).then(async r => {
+      const body = await r.json()
+      if (!r.ok) throw new Error(body.error || '暂时没有可播放的地址')
+      return body as { songKey: string }
+    }),
+  streamUrl: (songKey: string) => `/api/stream?songKey=${encodeURIComponent(songKey)}`,
+  lyricsFor: (input: { songKey?: string; musicInfo?: unknown }) =>
+    fetch('/api/lyrics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input.musicInfo ? { musicInfo: input.musicInfo } : { songKey: input.songKey }),
+    }).then(async r => {
+      const body = await r.json()
+      if (!r.ok) throw new Error(body.error || '歌词获取失败')
+      return body as { lyric: string; tlyric?: string }
+    }),
   settings: () => fetch('/api/settings').then(r => r.json()),
   putSettings: (body: object) =>
     fetch('/api/settings', {
