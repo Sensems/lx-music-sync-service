@@ -3,9 +3,14 @@ import { ConfigProvider } from 'ant-design-vue'
 import StationBar from './components/StationBar.vue'
 import SyncRibbon from './components/SyncRibbon.vue'
 import BackToTop from './components/BackToTop.vue'
+import PlayerShell from './player/PlayerShell.vue'
 import { useTheme } from './composables/useTheme'
+import { usePlayer } from './player/usePlayer'
+import { computed } from 'vue'
 
 const { antTheme } = useTheme()
+const player = usePlayer()
+const mainPad = computed(() => (player.current.value ? 'pb-44' : 'pb-28'))
 </script>
 
 <template>
@@ -15,7 +20,7 @@ const { antTheme } = useTheme()
         跳到内容
       </a>
       <StationBar />
-      <main id="main" class="flex-1 px-4 md:px-10 pb-28">
+      <main id="main" class="flex-1 px-4 md:px-10" :class="mainPad">
         <router-view v-slot="{ Component, route }">
           <Transition name="page-fade" mode="out-in">
             <component :is="Component" :key="route.path" />
@@ -23,6 +28,7 @@ const { antTheme } = useTheme()
         </router-view>
       </main>
       <BackToTop />
+      <PlayerShell />
       <SyncRibbon />
     </div>
   </ConfigProvider>
