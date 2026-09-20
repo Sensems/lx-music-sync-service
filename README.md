@@ -50,7 +50,7 @@ Vue 3 写的 Web 界面「听柜」和一套 CLI，镜像一次构建、单进�
 - **定时同步**：内置 cron（每 6 小时 / 每天固定时刻 / 自定义 cron 表达式），默认关闭。
 - **封面与歌词**：同步时顺带补全封面；`/api/lyrics` 支持按需取歌词和翻译歌词，另有封面回填补齐历史数据。
 - **HTTP 代理**：设置里开代理后，音源脚本请求、SDK 请求和下载都走同一个代理。
-- **Web 界面**：歌单 / 唱片墙（已下载）/ 搜索 / 任务 / 设置五个页面，7 套主题（默认 `nightwood` 夜木），偏好存在 `localStorage`。
+- **Web 界面**：歌单 / 唱片墙（已下载）/ 搜索 / 任务 / 设置五个页面，12 套主题（默认 `nightwood` 夜木），偏好存在 `localStorage`。
 
 ## 它是怎么工作的
 
@@ -146,7 +146,7 @@ Vue 3 写的 Web 界面「听柜」和一套 CLI，镜像一次构建、单进�
 ├── web/                      # 「听柜」前端（Vue 3 + Vite）
 │   ├── src/api.ts            # 后端 API 客户端
 │   ├── src/router.ts         # /shelf /wall /search /tape /cabinet
-│   ├── src/themes.ts         # 7 套主题 token
+│   ├── src/themes.ts         # 12 套主题 token
 │   └── src/views/            # 五个页面
 ├── test/                     # Vitest 用例（12 个文件 / 39 个用例）
 ├── bin/lx-sync.mjs           # 生产入口：进程内注册 tsx，直接跑 TS

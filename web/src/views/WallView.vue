@@ -129,10 +129,10 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="wall-page" @click="clearSelectionIfOutside">
+  <section class="wall-page page-measure" @click="clearSelectionIfOutside">
     <header class="wall-hero">
       <div>
-        <p class="wall-kicker">LIBRARY</p>
+        <p class="page-kicker">LIBRARY</p>
         <h2 class="font-display text-3xl md:text-5xl m-0">唱片墙</h2>
         <p class="text-mute mt-2 max-w-xl m-0">
           已下载到本地的歌曲会显示在这里。点封面会出现播放。
@@ -231,10 +231,6 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.wall-page {
-  max-width: 1120px;
-}
-
 .wall-hero {
   display: flex;
   flex-wrap: wrap;
@@ -242,14 +238,6 @@ onMounted(() => {
   justify-content: space-between;
   align-items: end;
   margin-bottom: 1.25rem;
-}
-
-.wall-kicker {
-  margin: 0 0 0.35rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.7rem;
-  letter-spacing: 0.28em;
-  color: var(--mute);
 }
 
 .wall-stats {

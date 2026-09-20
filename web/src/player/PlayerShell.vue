@@ -461,14 +461,14 @@ onUnmounted(() => {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: var(--ribbon-h);
+  bottom: var(--station-h);
   z-index: 34;
   display: grid;
   grid-template-columns: minmax(12rem, 1fr) minmax(18rem, 1.5fr) minmax(9rem, 1fr);
   align-items: center;
   gap: 0.75rem;
   min-height: 4.5rem;
-  padding: 0.45rem max(1rem, var(--safe-r)) 0.45rem max(1rem, var(--safe-l));
+  padding: 0.45rem max(1rem, var(--safe-r)) calc(0.45rem + var(--safe-b)) max(1rem, var(--safe-l));
   background: var(--surface);
   border-top: 1px solid var(--border);
 }

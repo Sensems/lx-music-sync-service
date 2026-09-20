@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { Input, Select, message } from 'ant-design-vue'
+import { Input, Select, Spin, message } from 'ant-design-vue'
 import { api } from '../api'
 import SourceIcon from '../components/SourceIcon.vue'
 import { sourceLabels, type SourceId, type SearchHit } from '../mock/data'
@@ -27,7 +27,6 @@ async function runSearch() {
     return
   }
   searching.value = true
-  searched.value = true
   try {
     const body = await api.search(source.value, q.value.trim())
     hits.value = (body.list ?? []).map((m: Record<string, unknown>) => {
@@ -46,8 +45,10 @@ async function runSearch() {
         picUrl: pic && pic !== 'null' && pic !== 'undefined' ? pic : '',
       }
     })
+    searched.value = true
   } catch (err) {
     hits.value = []
+    searched.value = true
     message.error(err instanceof Error ? err.message : '搜索失败')
   } finally {
     searching.value = false
@@ -108,7 +109,8 @@ async function press(hit: SearchHit) {
 </script>
 
 <template>
-  <section class="max-w-3xl">
+  <section class="page-measure">
+    <p class="page-kicker">SEARCH</p>
     <h2 class="font-display text-3xl md:text-4xl m-0">搜索</h2>
     <p class="text-mute mt-2">搜索单曲并下载到本地。之后歌单里再出现同一首歌，不会重复下载。</p>
 
@@ -128,7 +130,12 @@ async function press(hit: SearchHit) {
       </div>
     </form>
 
-    <ol v-if="hits.length" class="list-none p-0 mt-8 bg-card text-ink stagger-in">
+    <div v-if="searching" class="search-wait" role="status" aria-live="polite">
+      <Spin size="small" />
+      <p>正在找</p>
+    </div>
+
+    <ol v-else-if="hits.length" class="search-list stagger-in">
       <li
         v-for="(h, i) in hits"
         :key="h.songKey"
@@ -151,15 +158,18 @@ async function press(hit: SearchHit) {
             <span class="i-lucide-list-plus" aria-hidden="true" />
             加入队列
           </button>
-          <a-button
-            type="primary"
-            class="stamp !text-ink !h-11 !px-3 !text-sm !inline-flex !items-center !gap-1 !flex-1 sm:!flex-none sm:!h-auto sm:!px-2 sm:!py-0.5 sm:!text-sm"
-            :loading="pressing === h.songKey"
+          <button
+            type="button"
+            class="search-row-btn"
+            :disabled="pressing === h.songKey"
             @click="press(h)"
           >
-            <span v-if="pressing !== h.songKey" class="i-lucide-download" aria-hidden="true" />
-            下载到本地
-          </a-button>
+            <span
+              :class="pressing === h.songKey ? 'i-lucide-loader-circle search-row-btn__spin' : 'i-lucide-download'"
+              aria-hidden="true"
+            />
+            {{ pressing === h.songKey ? '下载中' : '下载到本地' }}
+          </button>
         </div>
       </li>
     </ol>
@@ -172,6 +182,42 @@ async function press(hit: SearchHit) {
 </template>
 
 <style scoped>
+.search-wait {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-height: 5.5rem;
+  margin-top: 2rem;
+  color: var(--mute);
+  animation: search-wait-in 0.35s ease both;
+}
+
+.search-wait p {
+  margin: 0;
+}
+
+@keyframes search-wait-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.search-list {
+  list-style: none;
+  margin: 2rem 0 0;
+  padding: 0;
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  transition:
+    background-color 0.25s ease,
+    color 0.25s ease,
+    border-color 0.25s ease;
+}
+
 .search-form {
   display: flex;
   flex-direction: column;
@@ -191,13 +237,13 @@ async function press(hit: SearchHit) {
   align-items: center;
   padding: 0.75rem 1.25rem;
   border: 0;
-  border-bottom: 1px solid #d8c6a8;
+  border-bottom: 1px solid var(--border);
 }
 
 .search-row__idx {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
   font-size: 0.75rem;
-  color: #6b5346;
+  color: var(--mute);
 }
 
 .search-row__meta {
@@ -216,7 +262,7 @@ async function press(hit: SearchHit) {
 .search-row__sub {
   display: block;
   font-size: 0.875rem;
-  color: #5c4638;
+  color: var(--mute);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -245,8 +291,30 @@ async function press(hit: SearchHit) {
   min-height: 2.5rem;
 }
 
-.search-row-btn:hover {
-  color: #3d4a2a;
+.search-row-btn:hover:not(:disabled) {
+  color: var(--foil);
+}
+
+.search-row-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.search-row-btn__spin {
+  animation: search-spin 0.8s linear infinite;
+}
+
+@keyframes search-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search-wait,
+  .search-row-btn__spin {
+    animation: none;
+  }
 }
 
 @media (max-width: 767px) {

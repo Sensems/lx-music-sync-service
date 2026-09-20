@@ -3,10 +3,11 @@
   --safe-r: env(safe-area-inset-right, 0px);
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-l: env(safe-area-inset-left, 0px);
-  --ribbon-body: 3.05rem;
-  --ribbon-h: calc(var(--ribbon-body) + var(--safe-b));
+  --ribbon-h: 0px;
   --player-h: 0px;
-  --chrome-bottom: calc(var(--ribbon-h) + var(--player-h));
+  --station-h: 0px;
+  --station-w: 0px;
+  --chrome-bottom: calc(var(--player-h) + var(--station-h) + var(--safe-b));
   --cabinet: #322824;
   --wine: #5c2a36;
   --foil: #d8ae7e;
@@ -27,12 +28,9 @@ html.has-player {
   --player-h: 4.85rem;
 }
 
-html.is-now {
-  --ribbon-h: 0px;
-}
-
 html.is-now.has-player {
   --player-h: calc(4.85rem + var(--safe-b));
+  --chrome-bottom: var(--player-h);
 }
 
 html,
@@ -145,35 +143,49 @@ html[data-theme-mode='light'] .ant-btn-primary.ant-btn-primary:not(:disabled):ac
   color: var(--card) !important;
 }
 
-html[data-theme-mode='light'] .nav-hit.router-link-active,
-html[data-theme-mode='light'] .nav-hit.router-link-exact-active {
-  color: var(--card);
-}
+@media (min-width: 768px) {
+  html[data-theme-mode='light'] .nav-hit.router-link-active,
+  html[data-theme-mode='light'] .nav-hit.router-link-exact-active {
+    color: var(--card);
+  }
 
-html[data-theme-mode='light'] .nav-hit.router-link-active .text-mute,
-html[data-theme-mode='light'] .nav-hit.router-link-exact-active .text-mute {
-  color: color-mix(in srgb, var(--card) 72%, transparent);
+  html[data-theme-mode='light'] .nav-hit.router-link-active .text-mute,
+  html[data-theme-mode='light'] .nav-hit.router-link-exact-active .text-mute {
+    color: color-mix(in srgb, var(--card) 72%, transparent);
+  }
 }
 
 .ant-modal-content {
   border: 1px solid var(--border);
 }
 
-.page-fade-enter-active,
-.page-fade-leave-active {
+.page-fade-enter-active {
   transition:
-    opacity 0.28s ease,
-    transform 0.28s ease;
+    opacity 0.42s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.page-fade-leave-active {
+  transition: opacity 0.2s ease;
 }
 
 .page-fade-enter-from {
   opacity: 0;
-  transform: translateY(10px);
+  transform: translateY(6px);
 }
 
 .page-fade-leave-to {
   opacity: 0;
-  transform: translateY(-6px);
+}
+
+.now-fade-enter-active,
+.now-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.now-fade-enter-from,
+.now-fade-leave-to {
+  opacity: 0;
 }
 
 .stamp {
@@ -217,12 +229,8 @@ html[data-theme-mode='light'] .schedule-time {
   color-scheme: light;
 }
 
-.sync-ribbon__bar {
-  transition: width 0.35s ease;
-}
-
 .stagger-in > * {
-  animation: rise-in 0.38s ease both;
+  animation: rise-in 0.46s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .stagger-in > *:nth-child(1) {
@@ -256,11 +264,22 @@ html[data-theme-mode='light'] .schedule-time {
 @keyframes rise-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(5px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none;
+  }
+}
+
+@keyframes kicker-in {
+  from {
+    opacity: 0;
+    letter-spacing: 0.42em;
+  }
+  to {
+    opacity: 1;
+    letter-spacing: 0.28em;
   }
 }
 
@@ -279,18 +298,40 @@ html[data-theme-mode='light'] .schedule-time {
   color: var(--fg);
 }
 
+/* 侧栏留下的舞台里把内容列放正中，宽度和歌单页对齐 */
+.page-measure {
+  width: 100%;
+  max-width: 72rem;
+  margin-inline: auto;
+}
+
+.page-kicker {
+  margin: 0 0 0.35rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.28em;
+  color: var(--mute);
+  animation: kicker-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 @media (max-width: 767px) {
   :root {
-    --ribbon-body: 2.85rem;
     --player-h: 0px;
+    --station-h: calc(3.55rem + var(--safe-b));
+    --chrome-bottom: calc(var(--player-h) + var(--station-h));
   }
 
   html.has-player {
     --player-h: 5.85rem;
   }
 
+  html.is-now {
+    --station-h: 0px;
+  }
+
   html.is-now.has-player {
     --player-h: calc(8.35rem + var(--safe-b));
+    --chrome-bottom: var(--player-h);
   }
 
   .ant-input,
@@ -319,7 +360,15 @@ html[data-theme-mode='light'] .schedule-time {
 
 @media (min-width: 768px) {
   :root {
-    --ribbon-body: 3.45rem;
+    --station-w: 10.5rem;
+  }
+
+  html.station-slim {
+    --station-w: 3.75rem;
+  }
+
+  html.is-now {
+    --station-w: 0px;
   }
 
   html.has-player {
@@ -328,5 +377,6 @@ html[data-theme-mode='light'] .schedule-time {
 
   html.is-now.has-player {
     --player-h: calc(6.2rem + var(--safe-b));
+    --chrome-bottom: var(--player-h);
   }
 }

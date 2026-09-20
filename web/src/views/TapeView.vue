@@ -29,18 +29,25 @@ const jobs = ref<JobRow[]>([])
 const running = ref<Running>(null)
 let timer: ReturnType<typeof setInterval> | undefined
 
-const tone: Record<string, string> = {
+const tone: Record<JobLine['kind'], string> = {
   run: 'text-tungsten',
   skip: 'text-mute',
   done: 'text-foil',
   fail: 'text-rec',
 }
 
-const mark: Record<string, string> = {
+const mark: Record<JobLine['kind'], string> = {
   run: '进行中',
   skip: '跳过',
   done: '完成',
   fail: '失败',
+}
+
+const colors: Record<JobLine['kind'], string> = {
+  run: 'var(--tungsten)',
+  skip: 'var(--mute)',
+  done: 'var(--foil)',
+  fail: 'var(--rec)',
 }
 
 function kindOf(job: JobRow): JobLine['kind'] {
@@ -130,22 +137,18 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="max-w-3xl">
+  <section class="page-measure">
+    <p class="page-kicker">TAPE</p>
     <h2 class="font-display text-3xl md:text-4xl m-0">任务</h2>
     <p class="text-mute mt-2">查看同步与下载记录：扫过多少、跳过多少、新下了多少。</p>
 
-    <div v-if="lines.length" class="mt-8 relative pl-6 border-0 border-l-2 border-solid border-border stagger-in">
-      <article
-        v-for="line in lines"
-        :key="line.id"
-        class="relative mb-8"
-      >
-        <span class="absolute -left-[1.6rem] top-1 w-3 h-3 rounded-full bg-foil" aria-hidden="true" />
+    <a-timeline v-if="lines.length" class="tape-timeline mt-8 stagger-in">
+      <a-timeline-item v-for="line in lines" :key="line.id" :color="colors[line.kind]">
         <p class="font-mono text-xs m-0" :class="tone[line.kind]">{{ mark[line.kind] }}</p>
         <h3 class="text-lg m-0 mt-1 text-fg text-pretty">{{ line.title }}</h3>
         <p class="text-sm text-mute m-0 mt-1 break-words">{{ line.detail }}</p>
-      </article>
-    </div>
+      </a-timeline-item>
+    </a-timeline>
     <div v-else class="mt-10 text-mute">
       <p class="font-display text-2xl text-fg m-0">暂无任务记录</p>
       <p>去歌单同步一张，或在设置里打开定时同步。</p>
@@ -153,3 +156,17 @@ onUnmounted(() => {
     </div>
   </section>
 </template>
+
+<style scoped>
+.tape-timeline :deep(.ant-timeline-item-tail) {
+  border-inline-start-color: var(--border);
+}
+
+.tape-timeline :deep(.ant-timeline-item-head) {
+  background-color: var(--cabinet);
+}
+
+.tape-timeline :deep(.ant-timeline-item-content) {
+  inset-block-start: 0;
+}
+</style>

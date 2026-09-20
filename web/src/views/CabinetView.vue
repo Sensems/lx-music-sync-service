@@ -156,7 +156,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="page-panel max-w-2xl">
+  <section class="page-panel page-measure">
+    <p class="page-kicker">CABINET</p>
     <h2 class="font-display text-3xl md:text-4xl m-0">设置</h2>
     <p class="text-mute mt-2">管理音源、下载目录和外观。服务监听地址仍在配置文件里修改。</p>
 
@@ -164,7 +165,7 @@ onMounted(() => {
       <div>
         <h3 class="font-display text-2xl m-0">外观主题</h3>
         <p class="text-sm text-mute mt-1 mb-3">选择一套配色，偏好保存在本机浏览器。</p>
-        <div class="theme-grid">
+        <div class="theme-grid stagger-in">
           <button
             v-for="t in themeList"
             :key="t.id"
@@ -196,14 +197,14 @@ onMounted(() => {
         <p class="font-mono text-xs text-foil m-0 mb-3">{{ sourceMeta.status }}</p>
         <div class="flex flex-wrap gap-2 mb-3">
           <Upload :show-upload-list="false" accept=".js" :custom-request="uploadScript">
-            <a-button class="stamp">上传 .js</a-button>
+            <a-button type="primary" class="stamp !h-11 !text-ink">上传 .js</a-button>
           </Upload>
         </div>
         <label class="block">
           <span class="block text-sm text-mute mb-1">在线导入（http/https 直链）</span>
           <div class="flex flex-col sm:flex-row gap-2">
             <Input v-model:value="importUrl" placeholder="https://example.com/source.js" class="flex-1" />
-            <a-button class="stamp" :loading="importing" @click="importFromUrl">在线导入</a-button>
+            <a-button type="primary" class="stamp !h-11 !text-ink" :loading="importing" @click="importFromUrl">在线导入</a-button>
           </div>
         </label>
       </div>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Switch, message } from 'ant-design-vue'
 import type { Playlist, Track } from '../mock/data'
 import { sourceLabels } from '../mock/data'
@@ -11,6 +12,9 @@ const props = defineProps<{
   tracks: Track[]
   syncing?: boolean
 }>()
+
+const trackCount = computed(() => props.tracks.length || props.playlist.trackCount)
+const downloadedCount = computed(() => props.tracks.filter(t => t.downloaded).length)
 
 const emit = defineEmits<{
   'update:enabled': [value: boolean]
@@ -51,36 +55,36 @@ function onEnqueueTrack(t: Track) {
 </script>
 
 <template>
-  <article class="bg-card text-ink p-4 sm:p-5 md:p-8 min-h-80 flex flex-col gap-5 md:gap-6">
-    <header class="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-      <div class="min-w-0">
-        <p class="font-mono text-xs tracking-[0.16em] text-[#6b5346] m-0 flex items-center gap-1.5">
-          <SourceIcon :source="playlist.source" :size="14" />
-          {{ sourceLabels[playlist.source] }}
-        </p>
-        <h2 class="font-display text-3xl md:text-4xl m-0 mt-1 break-words">{{ playlist.name }}</h2>
-        <p class="sleeve-url font-mono text-xs mt-2 text-[#5c4638]">{{ playlist.url }}</p>
-      </div>
-      <div class="sleeve-actions">
-        <label class="flex items-center gap-2 text-sm cursor-pointer min-h-11">
-          <Switch :checked="playlist.enabled" @change="(v) => emit('update:enabled', Boolean(v))" />
-          <span>{{ playlist.enabled ? '加入定时同步' : '暂停定时' }}</span>
-        </label>
+  <article class="sleeve">
+    <header class="sleeve-head">
+      <p class="page-kicker sleeve-kicker">SLEEVE</p>
+      <p class="sleeve-source">
+        <SourceIcon :source="playlist.source" :size="14" />
+        {{ sourceLabels[playlist.source] }}
+      </p>
+      <h2 class="sleeve-title">{{ playlist.name }}</h2>
+      <p class="sleeve-url">{{ playlist.url }}</p>
+      <p class="sleeve-count">{{ trackCount }} 首，已下载 {{ downloadedCount }}</p>
+      <div class="sleeve-toolbar">
         <a-button
-          class="stamp !h-11 !px-5 !text-ink !inline-flex !items-center !gap-1.5 !flex-1 sm:!flex-none"
+          class="stamp sleeve-btn sleeve-play"
           :disabled="!tracks.length"
           @click="onPlayPlaylist"
         >
           <span class="i-lucide-list-music" aria-hidden="true" />
           播放歌单
         </a-button>
-        <a-button type="primary" class="stamp !h-11 !px-5 !text-ink !flex-1 sm:!flex-none" :loading="props.syncing" @click="press">
-          同步
-        </a-button>
+        <div class="sleeve-tools">
+          <a-button class="stamp sleeve-btn" :loading="props.syncing" @click="press">同步</a-button>
+          <label class="sleeve-cron">
+            <Switch :checked="playlist.enabled" @change="(v) => emit('update:enabled', Boolean(v))" />
+            <span>{{ playlist.enabled ? '定时开着' : '定时关着' }}</span>
+          </label>
+        </div>
       </div>
     </header>
 
-    <ol v-if="tracks.length" class="list-none p-0 m-0 flex flex-col gap-1 stagger-in">
+    <ol v-if="tracks.length" class="sleeve-list stagger-in">
       <li
         v-for="(t, i) in tracks"
         :key="t.songKey"
@@ -93,7 +97,7 @@ function onEnqueueTrack(t: Track) {
         </span>
         <div class="sleeve-row__ops">
           <span>
-            <span v-if="t.downloaded" class="text-[#3d4a2a]">已下载</span>
+            <span v-if="t.downloaded" class="sleeve-row__ok">已下载</span>
             <span v-else class="text-rec">未下载</span>
           </span>
           <span class="flex gap-2">
@@ -109,24 +113,131 @@ function onEnqueueTrack(t: Track) {
         </div>
       </li>
     </ol>
-    <p v-else class="text-sm text-[#5c4638] m-0">还没有曲目列表。点「同步」从线上拉取。</p>
+    <p v-else class="sleeve-empty">还没有曲目列表。点「同步」从线上拉取。</p>
   </article>
 </template>
 
 <style scoped>
+.sleeve {
+  min-height: 20rem;
+  padding: 1.15rem 1rem 1.25rem;
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  transition:
+    background-color 0.25s ease,
+    color 0.25s ease,
+    border-color 0.25s ease;
+}
+
+.sleeve-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding-bottom: 1.15rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.sleeve-kicker {
+  color: var(--mute);
+}
+
+.sleeve-source {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.75rem;
+  color: var(--mute);
+}
+
+.sleeve-title {
+  margin: 0.35rem 0 0;
+  font-family: 'ZCOOL XiaoWei', 'Noto Serif SC', serif;
+  font-size: 2rem;
+  line-height: 1.15;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.sleeve-url,
+.sleeve-count {
+  margin: 0.45rem 0 0;
+  color: var(--mute);
+}
+
 .sleeve-url {
-  margin: 0.5rem 0 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.75rem;
 }
 
-.sleeve-actions {
+.sleeve-count {
+  font-size: 0.9rem;
+}
+
+.sleeve-toolbar {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 0.65rem;
+  width: 100%;
+  margin-top: 1.05rem;
+}
+
+.sleeve-btn {
+  height: 2.75rem !important;
+  padding: 0 1.15rem !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0.4rem !important;
+  background: var(--wine) !important;
+  border-color: var(--wine) !important;
+  color: var(--card) !important;
+}
+
+.sleeve-btn:hover:not(:disabled) {
+  border-color: var(--foil) !important;
+}
+
+.sleeve-btn:disabled {
+  opacity: 0.4;
+}
+
+.sleeve-play {
+  width: 100%;
+}
+
+.sleeve-tools {
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.75rem;
-  min-width: 0;
+}
+
+.sleeve-cron {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.sleeve-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.35rem 0 0;
+}
+
+.sleeve-empty {
+  margin: 1.1rem 0 0;
+  font-size: 0.9rem;
+  color: var(--mute);
 }
 
 .sleeve-row {
@@ -136,13 +247,13 @@ function onEnqueueTrack(t: Track) {
   align-items: start;
   padding: 0.55rem 0;
   border: 0;
-  border-bottom: 1px solid #d8c6a8;
+  border-bottom: 1px solid var(--border);
 }
 
 .sleeve-row__idx {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
   font-size: 0.75rem;
-  color: #6b5346;
+  color: var(--mute);
   padding-top: 0.2rem;
 }
 
@@ -156,7 +267,7 @@ function onEnqueueTrack(t: Track) {
 .sleeve-row__sub {
   display: block;
   font-size: 0.875rem;
-  color: #5c4638;
+  color: var(--mute);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -186,15 +297,12 @@ function onEnqueueTrack(t: Track) {
   min-height: 2.5rem;
 }
 
+.sleeve-row__ok,
 .sleeve-row-btn:hover {
-  color: #3d4a2a;
+  color: var(--foil);
 }
 
 @media (max-width: 767px) {
-  .sleeve-actions {
-    width: 100%;
-  }
-
   .sleeve-row {
     grid-template-columns: 1.6rem 1fr;
     gap: 0.45rem 0.6rem;
@@ -207,6 +315,28 @@ function onEnqueueTrack(t: Track) {
     align-items: center;
     justify-content: space-between;
     width: 100%;
+  }
+}
+
+@media (min-width: 768px) {
+  .sleeve {
+    padding: 1.75rem 2rem 2rem;
+  }
+
+  .sleeve-title {
+    font-size: 2.35rem;
+  }
+
+  .sleeve-toolbar {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.75rem 1rem;
+  }
+
+  .sleeve-play {
+    width: auto;
   }
 }
 </style>

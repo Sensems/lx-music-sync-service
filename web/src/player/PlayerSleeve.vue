@@ -90,9 +90,9 @@ defineProps<{
 }
 
 .player-cover {
-  width: min(18.5rem, 78vw);
+  width: min(18.5rem, 72vw, calc(100dvh - var(--player-h) - 15.5rem));
   aspect-ratio: 1;
-  flex-shrink: 0;
+  flex-shrink: 1;
   border-radius: 0.85rem;
   overflow: hidden;
   background: var(--elevated);

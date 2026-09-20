@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ConfigProvider } from 'ant-design-vue'
 import StationBar from './components/StationBar.vue'
-import SyncRibbon from './components/SyncRibbon.vue'
 import BackToTop from './components/BackToTop.vue'
 import PlayerShell from './player/PlayerShell.vue'
 import { useTheme } from './composables/useTheme'
@@ -57,7 +56,6 @@ watch(
       </main>
       <BackToTop />
       <PlayerShell />
-      <SyncRibbon v-if="!isNow" />
     </div>
   </ConfigProvider>
 </template>
@@ -70,7 +68,7 @@ watch(
 }
 
 .app-main {
-  padding: 0 1rem calc(var(--chrome-bottom) + 1rem);
+  padding: 0.75rem 1rem calc(var(--chrome-bottom) + 1rem);
 }
 
 .app-main--now {
@@ -79,7 +77,8 @@ watch(
 
 @media (min-width: 768px) {
   .app-main {
-    padding-left: 2.5rem;
+    padding-top: 1.75rem;
+    padding-left: calc(var(--station-w) + 1.5rem);
     padding-right: 2.5rem;
     padding-bottom: calc(var(--chrome-bottom) + 1.25rem);
   }

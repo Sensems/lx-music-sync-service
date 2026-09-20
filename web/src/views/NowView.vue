@@ -258,7 +258,6 @@ onUnmounted(() => {
               :active-index="lyricIndex"
               :active="i === 1"
               :playing="playing"
-              @play="playFrom"
             />
           </div>
           <div v-else class="now__pane now__pane--lyrics">
@@ -394,10 +393,10 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(20rem, 0.95fr) minmax(22rem, 1.15fr);
+  grid-template-columns: minmax(16rem, 0.72fr) minmax(26rem, 1.4fr);
   align-items: stretch;
-  gap: clamp(2rem, 5vw, 4.25rem);
-  padding: 0.4rem clamp(2rem, 7vw, 6.5rem) var(--player-h);
+  gap: clamp(1.4rem, 4vw, 3.25rem);
+  padding: 0.4rem clamp(1.5rem, 5vw, 4.5rem) var(--player-h);
 }
 
 .now__stage {
@@ -542,10 +541,26 @@ onUnmounted(() => {
     padding: 0.45rem 1.15rem 0.2rem;
   }
 
+  .now__pane--cover {
+    overflow: hidden;
+  }
+
+  .now__pane--cover .now__heading-text,
+  .now__pane--cover .now__err {
+    flex-shrink: 0;
+  }
+
+  .now__pane--cover :deep(.lyric-scroller) {
+    flex: 0 0 auto;
+    height: clamp(4.25rem, calc(100dvh - var(--player-h) - 22.5rem), 7.4rem);
+    min-height: 0;
+  }
+
   .now__cover {
     display: block;
-    margin: 0.25rem auto 0.7rem;
-    flex-shrink: 0;
+    margin: 0.15rem auto 0.45rem;
+    flex: 0 1 auto;
+    min-height: 0;
   }
 
   .now__heading {

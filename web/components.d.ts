@@ -8,13 +8,14 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AButton: typeof import('ant-design-vue/es')['Button']
+    ATimeline: typeof import('ant-design-vue/es')['Timeline']
+    ATimelineItem: typeof import('ant-design-vue/es')['TimelineItem']
     BackToTop: typeof import('./src/components/BackToTop.vue')['default']
-    RecordSpine: typeof import('./src/components/RecordSpine.vue')['default']
+    PlaylistCard: typeof import('./src/components/PlaylistCard.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SleevePanel: typeof import('./src/components/SleevePanel.vue')['default']
     SourceIcon: typeof import('./src/components/SourceIcon.vue')['default']
     StationBar: typeof import('./src/components/StationBar.vue')['default']
-    SyncRibbon: typeof import('./src/components/SyncRibbon.vue')['default']
   }
 }

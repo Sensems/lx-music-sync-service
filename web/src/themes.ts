@@ -1,7 +1,19 @@
 import { theme } from 'ant-design-vue'
 import type { ThemeConfig } from 'ant-design-vue/es/config-provider/context'
 
-export type ThemeId = 'nightwood' | 'paper' | 'mist' | 'linen' | 'dawn' | 'slate' | 'pine'
+export type ThemeId =
+  | 'nightwood'
+  | 'paper'
+  | 'mist'
+  | 'linen'
+  | 'dawn'
+  | 'slate'
+  | 'pine'
+  | 'rosewood'
+  | 'ink'
+  | 'celadon'
+  | 'lane'
+  | 'moon'
 
 export type ThemeTokens = {
   cabinet: string
@@ -176,6 +188,116 @@ export const themes: Record<ThemeId, AppTheme> = {
       border: '#4a6354',
       elevated: '#31463b',
       glow: '#3d5c4833',
+    },
+  },
+  // 比夜木更深、更红：柜门生漆，箔用闷铜，避开陶土橙
+  rosewood: {
+    id: 'rosewood',
+    label: '紫檀',
+    hint: '深漆 · 夜里',
+    mode: 'dark',
+    tokens: {
+      cabinet: '#261411',
+      wine: '#7a2033',
+      foil: '#b89258',
+      tungsten: '#d4a04a',
+      rec: '#d14a32',
+      fg: '#f4e4d4',
+      card: '#f3e4d2',
+      ink: '#160e0c',
+      mute: '#9a756c',
+      surface: '#3a201c',
+      border: '#6a3e36',
+      elevated: '#452824',
+      glow: '#7a203333',
+    },
+  },
+  // 墨锭蓝黑，箔是宣纸色而不是金属金，避开黑底荧光绿
+  ink: {
+    id: 'ink',
+    label: '墨',
+    hint: '夜读',
+    mode: 'dark',
+    tokens: {
+      cabinet: '#15171e',
+      wine: '#3c3650',
+      foil: '#c6b494',
+      tungsten: '#c4aa58',
+      rec: '#d14a32',
+      fg: '#e6e3d8',
+      card: '#ebe6da',
+      ink: '#121218',
+      mute: '#8a8894',
+      surface: '#222530',
+      border: '#454756',
+      elevated: '#2c3040',
+      glow: '#3c365033',
+    },
+  },
+  // 龙泉窑灰绿，故意做旧，不要薄荷绿
+  celadon: {
+    id: 'celadon',
+    label: '青瓷',
+    hint: '浅色 · 釉面',
+    mode: 'light',
+    tokens: {
+      cabinet: '#d2dcd3',
+      wine: '#3c5246',
+      foil: '#3f5f4c',
+      tungsten: '#9a7c24',
+      rec: '#c23b22',
+      fg: '#1a221c',
+      card: '#f3f5f1',
+      ink: '#111914',
+      mute: '#647066',
+      surface: '#e8eee8',
+      border: '#b0beb4',
+      elevated: '#dee6df',
+      glow: '#3f5f4c22',
+    },
+  },
+  // 湿石板 + 油纸伞褪色紫，和青石的钢蓝分开
+  lane: {
+    id: 'lane',
+    label: '雨巷',
+    hint: '湿冷夜里',
+    mode: 'dark',
+    tokens: {
+      cabinet: '#1b2224',
+      wine: '#5a4954',
+      foil: '#87a8a4',
+      tungsten: '#c49a52',
+      rec: '#d14a32',
+      fg: '#dce6e4',
+      card: '#e6ece8',
+      ink: '#101615',
+      mute: '#82908c',
+      surface: '#252e30',
+      border: '#42504e',
+      elevated: '#2d383a',
+      glow: '#87a8a422',
+    },
+  },
+  // 冷瓷白，补上纸白/亚麻都偏奶油的空档
+  moon: {
+    id: 'moon',
+    label: '月白',
+    hint: '浅色 · 冷瓷',
+    mode: 'light',
+    tokens: {
+      cabinet: '#e4e6e2',
+      wine: '#4d4f4c',
+      foil: '#6e726c',
+      tungsten: '#a8882c',
+      rec: '#c23b22',
+      fg: '#1e221f',
+      card: '#f7f7f4',
+      ink: '#141613',
+      mute: '#6e746e',
+      surface: '#fbfbf8',
+      border: '#c5c8c2',
+      elevated: '#eef0ec',
+      glow: '#6e726c22',
     },
   },
 }
