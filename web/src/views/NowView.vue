@@ -551,8 +551,7 @@ onUnmounted(() => {
   }
 
   .now__pane--cover :deep(.lyric-scroller) {
-    flex: 0 0 auto;
-    height: clamp(4.25rem, calc(100dvh - var(--player-h) - 22.5rem), 7.4rem);
+    flex: 1 1 0;
     min-height: 0;
   }
 

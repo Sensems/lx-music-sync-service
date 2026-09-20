@@ -6,7 +6,7 @@ const props = withDefaults(
   defineProps<{
     lines: LyricLine[]
     activeIndex: number
-    variant?: 'desk' | 'preview' | 'full'
+    variant?: 'desk' | 'preview' | 'full' | 'car'
     active?: boolean
     playing?: boolean
   }>(),
@@ -49,6 +49,26 @@ function reduceMotion() {
 let programmatic = 0
 let returnTimer: ReturnType<typeof setTimeout> | undefined
 let settleTimer: ReturnType<typeof setTimeout> | undefined
+let scrollAnim = 0
+let scrollRelease: ReturnType<typeof setTimeout> | undefined
+
+/** 正弦缓入缓出：邻行也不会先冲后刹 */
+function easeInOutSine(t: number) {
+  return -(Math.cos(Math.PI * t) - 1) / 2
+}
+
+function cancelScrollAnim() {
+  const held = scrollAnim !== 0 || scrollRelease !== undefined
+  if (scrollAnim) {
+    cancelAnimationFrame(scrollAnim)
+    scrollAnim = 0
+  }
+  if (scrollRelease) {
+    clearTimeout(scrollRelease)
+    scrollRelease = undefined
+  }
+  if (held) programmatic = Math.max(0, programmatic - 1)
+}
 
 function clearReturn() {
   if (returnTimer) {
@@ -123,6 +143,47 @@ function onScrollEnd() {
   startReturnTimer()
 }
 
+function releaseProgrammatic() {
+  scrollRelease = window.setTimeout(() => {
+    scrollRelease = undefined
+    programmatic = Math.max(0, programmatic - 1)
+  }, 32)
+}
+
+function animateScroll(root: HTMLElement, top: number, smooth: boolean) {
+  cancelScrollAnim()
+  const dest = Math.max(0, top)
+  programmatic += 1
+  if (!smooth || reduceMotion() || Math.abs(dest - root.scrollTop) < 1) {
+    root.scrollTop = dest
+    releaseProgrammatic()
+    return
+  }
+  const from = root.scrollTop
+  const distance = dest - from
+  const duration = Math.min(1200, Math.max(820, 760 + Math.abs(distance) * 0.85))
+  const started = performance.now()
+  const step = (now: number) => {
+    const t = Math.min(1, (now - started) / duration)
+    root.scrollTop = from + distance * easeInOutSine(t)
+    if (t < 1) {
+      scrollAnim = requestAnimationFrame(step)
+      return
+    }
+    scrollAnim = 0
+    releaseProgrammatic()
+  }
+  scrollAnim = requestAnimationFrame(step)
+}
+
+function onListPointerDown() {
+  // 手一碰就停掉跟唱滚动，避免动画还在跑时滑不动
+  if (scrollAnim) {
+    cancelScrollAnim()
+    programmatic = 0
+  }
+}
+
 function scrollToActive(smooth: boolean) {
   const root = rootEl.value
   const i = props.activeIndex
@@ -133,22 +194,7 @@ function scrollToActive(smooth: boolean) {
   const elRect = el.getBoundingClientRect()
   const top =
     root.scrollTop + (elRect.top + elRect.height / 2) - (rootRect.top + root.clientHeight / 2)
-  programmatic += 1
-  root.scrollTo({
-    top,
-    behavior: reduceMotion() || !smooth ? 'auto' : 'smooth',
-  })
-  let released = false
-  const release = () => {
-    if (released) return
-    released = true
-    root.removeEventListener('scrollend', release)
-    window.setTimeout(() => {
-      programmatic = Math.max(0, programmatic - 1)
-    }, 32)
-  }
-  root.addEventListener('scrollend', release)
-  window.setTimeout(release, reduceMotion() || !smooth ? 80 : 480)
+  animateScroll(root, top, smooth)
 }
 
 function queueScroll(smooth: boolean) {
@@ -206,6 +252,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  cancelScrollAnim()
+  programmatic = 0
   exitPreview()
 })
 </script>
@@ -215,6 +263,7 @@ onUnmounted(() => {
     <div
       ref="rootEl"
       class="lyric-scroller__list"
+      @pointerdown="onListPointerDown"
       @scroll.passive="onUserScroll"
       @scrollend="onScrollEnd"
     >
@@ -259,13 +308,23 @@ onUnmounted(() => {
 .lyric-scroller__list {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
   scrollbar-width: none;
   -ms-overflow-style: none;
   mask-image: linear-gradient(to bottom, transparent, #000 10%, #000 90%, transparent);
-  padding: 18vh 1.25rem;
+  padding: 0 1.25rem;
   overscroll-behavior: contain;
   touch-action: pan-y;
+}
+
+/* 一半视口高的垫块，首尾行才能滚到中线被选中 */
+.lyric-scroller__list::before,
+.lyric-scroller__list::after {
+  content: '';
+  flex: 0 0 50%;
+  pointer-events: none;
 }
 
 .lyric-scroller__list::-webkit-scrollbar {
@@ -275,28 +334,37 @@ onUnmounted(() => {
 }
 
 .lyric-scroller__empty {
-  margin: 3rem 0 0;
+  margin: 0;
+  flex-shrink: 0;
   text-align: center;
   color: var(--mute);
 }
 
 .lyric-scroller__line {
   margin: 0;
+  flex-shrink: 0;
   padding: 0.7rem 0.45rem;
   text-align: center;
   font-size: calc(1.18rem - 2px);
   line-height: 1.7;
   color: color-mix(in srgb, var(--fg) 42%, transparent);
-  transition: color 0.2s ease;
+  transition: color 0.88s cubic-bezier(0.37, 0, 0.63, 1);
 }
 
 .lyric-scroller__text {
   display: block;
   min-width: 0;
+  transform: scale(0.985);
+  transform-origin: center;
+  transition: transform 0.88s cubic-bezier(0.37, 0, 0.63, 1);
 }
 
 .lyric-scroller__line.is-now {
   color: var(--fg);
+}
+
+.lyric-scroller__line.is-now .lyric-scroller__text {
+  transform: scale(1.035);
 }
 
 .lyric-scroller__hud {
@@ -352,16 +420,65 @@ onUnmounted(() => {
 }
 
 .lyric-scroller--preview {
-  flex: 0 0 auto;
+  flex: 1 1 0;
   min-height: 0;
 }
 
 .lyric-scroller--preview .lyric-scroller__list {
-  padding: 0.7rem 0.35rem;
+  padding-left: 0.35rem;
+  padding-right: 0.35rem;
 }
 
 .lyric-scroller--full .lyric-scroller__list {
-  padding: 1.5rem 1.1rem;
+  padding-left: 1.1rem;
+  padding-right: 1.1rem;
+}
+
+.lyric-scroller--car {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.lyric-scroller--car .lyric-scroller__list {
+  padding-left: 0.4rem;
+  padding-right: 0.4rem;
+}
+
+.lyric-scroller--car .lyric-scroller__empty {
+  font-size: clamp(1.4rem, 3vw, 2rem);
+}
+
+.lyric-scroller--car .lyric-scroller__line {
+  padding: 0.85rem 0.35rem;
+  font-size: clamp(1.35rem, 2.8vw, 1.95rem);
+  line-height: 1.45;
+}
+
+.lyric-scroller--car .lyric-scroller__line.is-now {
+  font-weight: 500;
+}
+
+.lyric-scroller--car .lyric-scroller__text {
+  transform: scale(0.97);
+}
+
+.lyric-scroller--car .lyric-scroller__line.is-now .lyric-scroller__text {
+  transform: scale(1.08);
+}
+
+.lyric-scroller--car .lyric-scroller__hud {
+  min-height: 3rem;
+  padding: 0.25rem 0.9rem;
+}
+
+.lyric-scroller--car .lyric-scroller__play {
+  width: 2.6rem;
+  min-width: 2.6rem;
+  min-height: 2.6rem;
+}
+
+.lyric-scroller--car .lyric-scroller__play-icon {
+  font-size: 1.15rem;
 }
 
 @media (max-width: 767px) {
@@ -372,13 +489,8 @@ onUnmounted(() => {
   }
 
   .lyric-scroller--preview {
-    flex: 0 0 auto;
+    flex: 1 1 0;
     min-height: 0;
-  }
-
-  .lyric-scroller--preview .lyric-scroller__list {
-    padding-top: 0.35rem;
-    padding-bottom: 0.35rem;
   }
 
   .lyric-scroller--full {
@@ -396,6 +508,16 @@ onUnmounted(() => {
     line-height: 1.55;
   }
 
+  .lyric-scroller--car .lyric-scroller__list {
+    padding-left: 0.15rem;
+    padding-right: 0.15rem;
+  }
+
+  .lyric-scroller--car .lyric-scroller__line {
+    padding: 0.62rem 0.2rem;
+    font-size: clamp(1.15rem, 4.8vw, 1.55rem);
+  }
+
   .lyric-scroller__hud {
     left: 0.15rem;
     right: 0.15rem;
@@ -404,8 +526,17 @@ onUnmounted(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lyric-scroller__line {
+  .lyric-scroller__line,
+  .lyric-scroller__text {
     transition: none;
+  }
+
+  .lyric-scroller__line.is-now .lyric-scroller__text {
+    transform: none;
+  }
+
+  .lyric-scroller__text {
+    transform: none;
   }
 }
 </style>

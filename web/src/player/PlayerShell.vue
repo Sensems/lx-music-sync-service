@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { usePlayer } from './usePlayer'
+import LyricScroller from './LyricScroller.vue'
 import PlayerSleeve from './PlayerSleeve.vue'
 
 const {
@@ -60,24 +61,10 @@ const playModeLabel = computed(() => {
   return '顺序播放'
 })
 
-const carLyrics = computed(() => {
-  const lines = lyricLines.value
-  const textAt = (i: number) => {
-    if (i < 0 || i >= lines.length) return ' '
-    return lines[i]?.text || ' '
-  }
-  if (lines.length === 0) {
-    return { farPrev: ' ', prev: ' ', now: '暂无歌词', next: ' ', farNext: ' ' }
-  }
-  const i = lyricIndex.value < 0 ? 0 : lyricIndex.value
-  return {
-    farPrev: textAt(i - 2),
-    prev: textAt(i - 1),
-    now: textAt(i),
-    next: textAt(i + 1),
-    farNext: textAt(i + 2),
-  }
-})
+function playFrom(time: number) {
+  seek(time)
+  if (!playing.value) toggle()
+}
 
 watch(error, (msg) => {
   if (msg) message.error(msg)
@@ -226,11 +213,14 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="player-car__lyric-col" aria-live="polite">
-          <p class="player-car__line is-far">{{ carLyrics.farPrev }}</p>
-          <p class="player-car__line is-prev">{{ carLyrics.prev }}</p>
-          <p class="player-car__line is-now">{{ carLyrics.now }}</p>
-          <p class="player-car__line is-next">{{ carLyrics.next }}</p>
-          <p class="player-car__line is-far">{{ carLyrics.farNext }}</p>
+          <LyricScroller
+            variant="car"
+            :lines="lyricLines"
+            :active-index="lyricIndex"
+            :active="true"
+            :playing="playing"
+            @play="playFrom"
+          />
         </div>
       </div>
       <div class="player-car__seek">
@@ -1048,37 +1038,12 @@ html[data-theme-mode='light'] .player-bar__badge {
 }
 
 .player-car__lyric-col {
-  flex: 1;
+  flex: 1.15;
   min-width: 0;
+  min-height: 0;
+  align-self: stretch;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  gap: 0.85rem;
-  text-align: center;
-}
-
-.player-car__line {
-  margin: 0;
-  max-width: 100%;
-  line-height: 1.4;
-}
-
-.player-car__line.is-far {
-  font-size: clamp(1.05rem, 2.1vw, 1.45rem);
-  color: color-mix(in srgb, var(--mute) 72%, transparent);
-}
-
-.player-car__line.is-prev,
-.player-car__line.is-next {
-  font-size: clamp(1.25rem, 2.7vw, 1.8rem);
-  color: var(--mute);
-}
-
-.player-car__line.is-now {
-  font-size: clamp(1.85rem, 4vw, 2.7rem);
-  font-weight: 500;
-  color: var(--fg);
 }
 
 .player-car__seek {
@@ -1408,7 +1373,7 @@ html[data-theme-mode='light'] .player-bar__badge {
   .player-car__lyric-col {
     flex: 1;
     width: 100%;
-    gap: 0.5rem;
+    min-height: 0;
   }
 
   .player-car__seek {

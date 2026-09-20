@@ -60,7 +60,8 @@ button,
 a,
 [role='button'] {
   touch-action: manipulation;
-  -webkit-tap-highlight-color: color-mix(in srgb, var(--foil) 22%, transparent);
+  /* WebKit 点按高亮只认矩形盒，圆按钮上会铺一块方蒙版 */
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
