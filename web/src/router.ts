@@ -9,5 +9,6 @@ export default createRouter({
     { path: '/search', name: 'search', component: () => import('./views/SearchView.vue'), meta: { title: '搜索' } },
     { path: '/tape', name: 'tape', component: () => import('./views/TapeView.vue'), meta: { title: '任务' } },
     { path: '/cabinet', name: 'cabinet', component: () => import('./views/CabinetView.vue'), meta: { title: '设置' } },
+    { path: '/now', name: 'now', component: () => import('./views/NowView.vue'), meta: { title: '正在播放' } },
   ],
 })

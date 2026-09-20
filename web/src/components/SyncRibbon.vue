@@ -2,6 +2,14 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { api } from '../api'
 
+const root = ref<HTMLElement | null>(null)
+let ribbonObs: ResizeObserver | undefined
+
+function syncRibbonHeight() {
+  const h = root.value?.offsetHeight ?? 0
+  document.documentElement.style.setProperty('--ribbon-h', `${h}px`)
+}
+
 type Running = {
   trackDone: number
   trackTotal: number
@@ -72,15 +80,22 @@ async function refresh() {
 onMounted(() => {
   void refresh()
   timer = setInterval(() => void refresh(), 1500)
+  if (root.value) {
+    ribbonObs = new ResizeObserver(syncRibbonHeight)
+    ribbonObs.observe(root.value)
+    syncRibbonHeight()
+  }
 })
 
 onUnmounted(() => {
   if (timer) clearInterval(timer)
+  ribbonObs?.disconnect()
+  document.documentElement.style.removeProperty('--ribbon-h')
 })
 </script>
 
 <template>
-  <aside class="sync-ribbon" aria-live="polite">
+  <aside ref="root" class="sync-ribbon" aria-live="polite">
     <div class="sync-ribbon__row">
       <span class="sync-ribbon__live">
         <span class="i-lucide-activity text-rec" aria-hidden="true" />

@@ -33,3 +33,4 @@ export function activeLineIndex(lines: LyricLine[], t: number): number {
   }
   return idx
 }
+

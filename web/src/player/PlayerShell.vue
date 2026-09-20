@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { usePlayer } from './usePlayer'
 import PlayerSleeve from './PlayerSleeve.vue'
-import type { LoopMode } from './types'
 
 const {
   queue,
@@ -27,7 +26,6 @@ const {
   next,
   prev,
   setVolume,
-  toggleMute,
   setLoop,
   setShuffle,
   expand,
@@ -39,7 +37,6 @@ const {
 } = usePlayer()
 
 const showVol = ref(false)
-const lyricsEl = ref<HTMLElement | null>(null)
 
 const canSkip = computed(() => queue.value.length >= 2)
 
@@ -56,10 +53,11 @@ const progressPct = computed(() => {
 
 const volumePct = computed(() => `${(muted.value ? 0 : volume.value) * 100}%`)
 
-const loopLabel = computed(() => {
-  if (loop.value === 'one') return '单曲'
-  if (loop.value === 'all') return '列表'
-  return '顺序'
+const playModeLabel = computed(() => {
+  if (shuffle.value) return '随机'
+  if (loop.value === 'one') return '单曲循环'
+  if (loop.value === 'all') return '列表循环'
+  return '顺序播放'
 })
 
 const carLyrics = computed(() => {
@@ -85,36 +83,6 @@ watch(error, (msg) => {
   if (msg) message.error(msg)
 })
 
-function scrollActiveLyric(smooth = true) {
-  if (!expanded.value || carMode.value) return
-  const root = lyricsEl.value
-  const i = lyricIndex.value
-  if (!root || i < 0) return
-  const el = root.querySelector(`[data-lyric-line="${i}"]`)
-  if (!(el instanceof HTMLElement)) return
-  // offsetTop 相对的是 position:relative 的播放页，不是歌词滚动区
-  const rootRect = root.getBoundingClientRect()
-  const elRect = el.getBoundingClientRect()
-  const top =
-    root.scrollTop + (elRect.top + elRect.height / 2) - (rootRect.top + root.clientHeight / 2)
-  root.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' })
-}
-
-function queueLyricScroll(smooth: boolean) {
-  void nextTick(() => {
-    requestAnimationFrame(() => scrollActiveLyric(smooth))
-  })
-}
-
-watch(lyricIndex, () => {
-  queueLyricScroll(true)
-})
-
-watch([expanded, carMode], ([exp, car]) => {
-  if (!exp || car) return
-  queueLyricScroll(false)
-})
-
 function formatTime(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return '0:00'
   const s = Math.floor(sec)
@@ -133,10 +101,22 @@ function onVolume(ev: Event) {
   setVolume(Number(el.value))
 }
 
-function cycleLoop() {
-  const order: LoopMode[] = ['off', 'all', 'one']
-  const i = order.indexOf(loop.value)
-  setLoop(order[(i + 1) % order.length]!)
+function cyclePlayMode() {
+  if (shuffle.value) {
+    setShuffle(false)
+    setLoop('off')
+    return
+  }
+  if (loop.value === 'off') {
+    setLoop('all')
+    return
+  }
+  if (loop.value === 'all') {
+    setLoop('one')
+    return
+  }
+  setLoop('all')
+  setShuffle(true)
 }
 
 function toggleExpand() {
@@ -213,82 +193,6 @@ onUnmounted(() => {
 
 <template>
   <template v-if="current">
-    <!-- 歌曲详情：盖住页面，底栏仍留着（网易云桌面端交互） -->
-    <div
-      v-if="expanded && !carMode"
-      class="player-now"
-      role="dialog"
-      aria-modal="true"
-      aria-label="正在播放"
-    >
-      <div
-        class="player-now__bg"
-        :style="current.picUrl ? { backgroundImage: `url(${current.picUrl})` } : undefined"
-        aria-hidden="true"
-      />
-      <div class="player-now__shade" aria-hidden="true" />
-
-      <div class="player-now__head">
-        <span class="player-now__head-spacer" />
-        <button type="button" class="player-now__fold" aria-label="收起" @click="collapse">
-          <span class="i-lucide-chevron-down text-xl" aria-hidden="true" />
-        </button>
-        <button type="button" class="player-now__car" @click="onCarToggle">
-          <span class="i-lucide-car-front text-lg" aria-hidden="true" />
-          车载
-        </button>
-      </div>
-
-      <div class="player-now__body">
-        <div class="player-now__disc">
-          <PlayerSleeve variant="disc" :pic-url="current.picUrl" :name="current.name" :playing="playing" />
-          <div class="player-now__modes">
-            <button
-              type="button"
-              class="player-ctrl"
-              :class="loop !== 'off' ? 'is-on' : ''"
-              :aria-label="`循环：${loopLabel}`"
-              @click="cycleLoop"
-            >
-              <span v-if="loop === 'one'" class="i-lucide-repeat-1" aria-hidden="true" />
-              <span v-else-if="loop === 'all'" class="i-lucide-repeat" aria-hidden="true" />
-              <span v-else class="i-lucide-list-ordered" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              class="player-ctrl"
-              :class="shuffle ? 'is-on' : ''"
-              aria-label="随机"
-              :aria-pressed="shuffle"
-              @click="setShuffle(!shuffle)"
-            >
-              <span class="i-lucide-shuffle" aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-        <div class="player-now__lyric-col">
-          <h2 class="player-now__title">{{ current.name }}</h2>
-          <p class="player-now__artist">{{ current.singer }}</p>
-          <p v-if="error" class="player-now__err">
-            <span class="i-lucide-circle-alert" aria-hidden="true" />
-            {{ error }}
-          </p>
-          <div ref="lyricsEl" class="player-now__lyrics">
-            <p v-if="lyricLines.length === 0" class="player-now__empty">暂无歌词</p>
-            <p
-              v-for="(line, i) in lyricLines"
-              :key="`${line.time}-${i}`"
-              :data-lyric-line="i"
-              class="player-now__line"
-              :class="i === lyricIndex ? 'is-now' : ''"
-            >
-              {{ line.text || ' ' }}
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- 车载：左右两栏 + 大歌词 + 进度，盖住底栏 -->
     <div
       v-if="carMode"
@@ -297,6 +201,12 @@ onUnmounted(() => {
       aria-modal="true"
       aria-label="车载播放器"
     >
+      <div
+        class="player-car__bg"
+        :style="current.picUrl ? { backgroundImage: `url(${current.picUrl})` } : undefined"
+        aria-hidden="true"
+      />
+      <div class="player-car__shade" aria-hidden="true" />
       <header class="player-car__head">
         <button type="button" class="player-ctrl player-ctrl--label player-ctrl--lg" @click="exitCar">
           <span class="i-lucide-chevron-down text-2xl" aria-hidden="true" />
@@ -373,8 +283,8 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 底栏常驻 -->
-    <div v-if="!carMode" class="player-bar">
+    <!-- 底栏常驻；展开时与 /now 页面融成一块 -->
+    <div v-if="!carMode" class="player-bar" :class="expanded ? 'player-bar--now' : ''">
       <div class="player-bar__left">
         <button type="button" class="player-bar__cover" :aria-label="expanded ? '收起播放页' : '打开播放页'" @click="toggleExpand">
           <PlayerSleeve variant="thumb" :pic-url="current.picUrl" :name="current.name" :open="expanded" />
@@ -387,44 +297,37 @@ onUnmounted(() => {
       </div>
 
       <div class="player-bar__center">
-        <div class="player-bar__transport">
+        <div class="player-bar__playrow">
           <button
             type="button"
-            class="player-ctrl"
-            :class="loop !== 'off' ? 'is-on' : ''"
-            :aria-label="`循环：${loopLabel}`"
-            :title="`循环：${loopLabel}`"
-            @click="cycleLoop"
+            class="player-ctrl player-bar__mode"
+            :class="shuffle || loop !== 'off' ? 'is-on' : ''"
+            :aria-label="playModeLabel"
+            :title="playModeLabel"
+            @click="cyclePlayMode"
           >
-            <span v-if="loop === 'one'" class="i-lucide-repeat-1" aria-hidden="true" />
+            <span v-if="shuffle" class="i-lucide-shuffle" aria-hidden="true" />
+            <span v-else-if="loop === 'one'" class="i-lucide-repeat-1" aria-hidden="true" />
             <span v-else-if="loop === 'all'" class="i-lucide-repeat" aria-hidden="true" />
             <span v-else class="i-lucide-list-ordered" aria-hidden="true" />
           </button>
-          <button type="button" class="player-ctrl" :disabled="!canSkip" aria-label="上一首" @click="prev">
-            <span class="i-lucide-skip-back text-lg" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            class="player-ctrl player-hub"
-            :aria-label="playing ? '暂停' : '播放'"
-            @click="toggle"
-          >
-            <span v-if="playing" class="i-lucide-pause text-xl" aria-hidden="true" />
-            <span v-else class="i-lucide-play text-xl player-hub__play" aria-hidden="true" />
-          </button>
-          <button type="button" class="player-ctrl" :disabled="!canSkip" aria-label="下一首" @click="next">
-            <span class="i-lucide-skip-forward text-lg" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            class="player-ctrl"
-            :class="shuffle ? 'is-on' : ''"
-            aria-label="随机"
-            :aria-pressed="shuffle"
-            @click="setShuffle(!shuffle)"
-          >
-            <span class="i-lucide-shuffle" aria-hidden="true" />
-          </button>
+          <div class="player-bar__transport">
+            <button type="button" class="player-ctrl" :disabled="!canSkip" aria-label="上一首" @click="prev">
+              <span class="i-lucide-skip-back text-lg" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              class="player-ctrl player-hub"
+              :aria-label="playing ? '暂停' : '播放'"
+              @click="toggle"
+            >
+              <span v-if="playing" class="i-lucide-pause text-xl" aria-hidden="true" />
+              <span v-else class="i-lucide-play text-xl player-hub__play" aria-hidden="true" />
+            </button>
+            <button type="button" class="player-ctrl" :disabled="!canSkip" aria-label="下一首" @click="next">
+              <span class="i-lucide-skip-forward text-lg" aria-hidden="true" />
+            </button>
+          </div>
         </div>
         <div class="player-bar__seek">
           <span class="player-bar__clock">{{ formatTime(currentTime) }}</span>
@@ -506,6 +409,7 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <Transition name="queue-pop">
     <aside
       v-if="showQueue"
       class="player-queue"
@@ -539,6 +443,8 @@ onUnmounted(() => {
         </li>
       </ul>
     </aside>
+    </Transition>
+    <Transition name="queue-scrim">
     <div
       v-if="showQueue"
       class="player-queue__scrim"
@@ -546,6 +452,7 @@ onUnmounted(() => {
       aria-hidden="true"
       @click="showQueue = false"
     />
+    </Transition>
   </template>
 </template>
 
@@ -626,6 +533,13 @@ onUnmounted(() => {
   align-items: center;
   gap: 0.2rem;
   min-width: 0;
+}
+
+.player-bar__playrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
 }
 
 .player-bar__transport {
@@ -859,174 +773,75 @@ html[data-theme-mode='light'] .player-bar__badge {
   display: none;
 }
 
-.player-now {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: var(--chrome-bottom);
-  z-index: 31;
-  display: flex;
-  flex-direction: column;
-  overflow: clip;
-  animation: player-now-in 0.28s ease-out;
-  padding-top: env(safe-area-inset-top, 0);
-  background: var(--cabinet);
+.player-bar--now {
+  bottom: 0;
+  background: transparent;
+  border-top: 0;
+  box-shadow: none;
+  padding-bottom: calc(0.45rem + var(--safe-b));
 }
 
-.player-now__bg {
-  position: absolute;
-  inset: 0;
-  background: var(--cabinet) center / cover no-repeat;
-  filter: blur(60px) saturate(1.2);
-  transform: scale(1.12);
-  opacity: 0.55;
-  pointer-events: none;
-}
+@media (min-width: 768px) {
+  .player-bar--now {
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      'seek seek seek'
+      'mode mid extras';
+    min-height: 6.15rem;
+    padding: 0.55rem max(2.4rem, var(--safe-r)) calc(0.85rem + var(--safe-b)) max(2.4rem, var(--safe-l));
+    gap: 0.35rem 0.8rem;
+  }
 
-.player-now__shade {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    color-mix(in srgb, var(--cabinet) 82%, transparent),
-    color-mix(in srgb, #000 28%, transparent);
-}
+  .player-bar--now .player-bar__left {
+    display: none;
+  }
 
-.player-now__head {
-  position: relative;
-  z-index: 2;
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-  padding: 0.35rem 0.75rem 0;
-}
+  .player-bar--now .player-bar__center,
+  .player-bar--now .player-bar__playrow {
+    display: contents;
+  }
 
-.player-now__head-spacer {
-  justify-self: start;
-}
+  .player-bar--now .player-bar__seek {
+    grid-area: seek;
+    max-width: none;
+  }
 
-.player-now__fold,
-.player-now__car {
-  appearance: none;
-  border: 0;
-  background: color-mix(in srgb, var(--fg) 14%, transparent);
-  color: var(--fg);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.3rem;
-  min-height: 2.5rem;
-  min-width: 2.5rem;
-  padding: 0 0.85rem;
-  border-radius: 999px;
-}
+  .player-bar--now .player-bar__mode {
+    grid-area: mode;
+  }
 
-.player-now__fold {
-  grid-column: 2;
-}
+  .player-bar--now .player-bar__transport {
+    grid-area: mid;
+    justify-content: center;
+    gap: 0.45rem;
+  }
 
-.player-now__car {
-  grid-column: 3;
-  justify-self: end;
-  font-size: 0.85rem;
-}
+  .player-bar--now .player-bar__right {
+    grid-area: extras;
+  }
 
-.player-now__fold:hover,
-.player-now__car:hover {
-  color: var(--foil);
-}
+  .player-bar--now .player-ctrl {
+    min-width: 2.7rem;
+    min-height: 2.7rem;
+  }
 
-.player-now__body {
-  position: relative;
-  z-index: 1;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  gap: 4.5rem;
-  padding: 1.25rem 6vw 2rem;
-}
+  .player-bar--now .player-hub {
+    width: 3.15rem;
+    height: 3.15rem;
+    min-width: 3.15rem;
+    min-height: 3.15rem;
+  }
 
-.player-now__disc {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  gap: 1rem;
-}
+  .player-bar--now .player-groove {
+    height: 5px;
+  }
 
-.player-now__modes {
-  display: none;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.player-now__lyric-col {
-  flex: 1;
-  min-width: 0;
-  max-width: 32rem;
-  height: min(32rem, 70vh);
-  display: flex;
-  flex-direction: column;
-}
-
-.player-now__title {
-  margin: 0;
-  font-size: 1.45rem;
-  font-weight: 500;
-  text-align: center;
-}
-
-.player-now__artist {
-  margin: 0.45rem 0 1rem;
-  text-align: center;
-  color: var(--mute);
-  font-size: 0.9rem;
-}
-
-.player-now__err {
-  margin: 0 0 0.75rem;
-  text-align: center;
-  color: var(--rec);
-  font-size: 0.8rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.3rem;
-}
-
-.player-now__lyrics {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  mask-image: linear-gradient(to bottom, transparent, #000 12%, #000 88%, transparent);
-  padding: 1.5rem 0.5rem;
-}
-
-.player-now__empty {
-  margin: 3rem 0 0;
-  text-align: center;
-  color: var(--mute);
-}
-
-.player-now__line {
-  margin: 0;
-  padding: 0.55rem 0.4rem;
-  text-align: center;
-  font-size: 0.95rem;
-  line-height: 1.7;
-  color: color-mix(in srgb, var(--fg) 42%, transparent);
-  transition: color 0.2s ease, font-size 0.2s ease;
-}
-
-.player-now__line.is-now {
-  color: var(--fg);
-  font-size: 1.2rem;
-  font-weight: 500;
+  .player-bar--now .player-groove::-webkit-slider-thumb,
+  .player-bar--now .player-groove::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    opacity: 1;
+  }
 }
 
 .player-queue {
@@ -1043,7 +858,6 @@ html[data-theme-mode='light'] .player-bar__badge {
   border: 1px solid var(--border);
   border-radius: 0.5rem;
   box-shadow: 0 16px 48px color-mix(in srgb, #000 38%, transparent);
-  animation: player-pop 0.2s ease-out;
 }
 
 .player-queue__scrim {
@@ -1160,6 +974,33 @@ html[data-theme-mode='light'] .player-bar__badge {
   overscroll-behavior: contain;
   animation: player-now-in 0.28s ease-out;
   padding-top: env(safe-area-inset-top, 0);
+}
+
+.player-car__bg {
+  position: absolute;
+  inset: 0;
+  background: var(--cabinet) center / cover no-repeat;
+  filter: blur(64px) saturate(1.25);
+  transform: scale(1.14);
+  opacity: 0.62;
+  pointer-events: none;
+}
+
+.player-car__shade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    color-mix(in srgb, var(--cabinet) 78%, transparent),
+    color-mix(in srgb, #000 32%, transparent);
+}
+
+.player-car__head,
+.player-car__body,
+.player-car__seek,
+.player-car__controls {
+  position: relative;
+  z-index: 1;
 }
 
 .player-car__head {
@@ -1337,15 +1178,27 @@ html[data-theme-mode='light'] .player-bar__badge {
   }
 }
 
-@keyframes player-pop {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
+.queue-scrim-enter-active,
+.queue-scrim-leave-active {
+  transition: opacity 0.38s ease;
+}
+
+.queue-scrim-enter-from,
+.queue-scrim-leave-to {
+  opacity: 0;
+}
+
+.queue-pop-enter-active,
+.queue-pop-leave-active {
+  transition:
+    opacity 0.26s ease,
+    transform 0.26s ease;
+}
+
+.queue-pop-enter-from,
+.queue-pop-leave-to {
+  opacity: 0;
+  transform: translateY(10px);
 }
 
 @media (max-width: 767px) {
@@ -1354,9 +1207,34 @@ html[data-theme-mode='light'] .player-bar__badge {
     grid-template-areas:
       'seek seek'
       'left right';
-    gap: 0.15rem 0.5rem;
-    min-height: 4.7rem;
-    padding: 0.3rem max(0.7rem, var(--safe-r)) 0.35rem max(0.7rem, var(--safe-l));
+    gap: 0.28rem 0.55rem;
+    min-height: 5.85rem;
+    padding: 0.42rem max(0.75rem, var(--safe-r)) 0.5rem max(0.75rem, var(--safe-l));
+  }
+
+  .player-bar:not(.player-bar--now) .player-bar__name {
+    font-size: 0.95rem;
+  }
+
+  .player-bar:not(.player-bar--now) .player-bar__singer {
+    font-size: 0.8rem;
+  }
+
+  .player-bar:not(.player-bar--now) .player-ctrl {
+    min-width: 2.9rem;
+    min-height: 2.9rem;
+  }
+
+  .player-bar:not(.player-bar--now) .player-hub,
+  .player-ctrl.player-bar__mplay {
+    width: 3.15rem;
+    height: 3.15rem;
+    min-width: 3.15rem;
+    min-height: 3.15rem;
+  }
+
+  .player-bar:not(.player-bar--now) .player-groove {
+    height: 4px;
   }
 
   .player-bar__vol {
@@ -1364,12 +1242,11 @@ html[data-theme-mode='light'] .player-bar__badge {
   }
 
   .player-groove::-webkit-slider-thumb {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
     opacity: 1;
   }
 
-  .player-now__lyrics,
   .player-queue__list {
     overscroll-behavior: contain;
   }
@@ -1379,7 +1256,8 @@ html[data-theme-mode='light'] .player-bar__badge {
     flex-direction: column-reverse;
   }
 
-  .player-bar__transport {
+  .player-bar__transport,
+  .player-bar:not(.player-bar--now) .player-bar__mode {
     display: none;
   }
 
@@ -1399,45 +1277,126 @@ html[data-theme-mode='light'] .player-bar__badge {
     display: none;
   }
 
-  .player-now__body {
-    flex-direction: column;
-    gap: 0.65rem;
-    padding: 0.35rem 1rem 0.75rem;
-    align-items: center;
-  }
-
-  .player-now__disc {
-    flex: 0 0 auto;
-  }
-
-  .player-now__title {
-    font-size: 1.2rem;
-  }
-
   .player-bar__seek {
     max-width: none;
   }
 
-  .player-now {
-    bottom: var(--chrome-bottom);
+  .player-bar--now {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      'seek seek seek'
+      'mode mid queue';
+    align-items: center;
+    gap: 0.45rem 0.25rem;
+    min-height: 8.35rem;
+    padding: 0.55rem max(0.55rem, var(--safe-r)) calc(1.25rem + var(--safe-b)) max(0.55rem, var(--safe-l));
   }
 
-  .player-now__modes {
+  .player-bar--now .player-bar__left,
+  .player-bar--now .player-bar__mplay,
+  .player-bar--now .player-bar__vol,
+  .player-bar--now .player-bar__ci {
+    display: none;
+  }
+
+  .player-bar--now .player-bar__center,
+  .player-bar--now .player-bar__playrow {
+    display: contents;
+  }
+
+  .player-bar--now .player-bar__seek {
+    grid-area: seek;
+  }
+
+  .player-bar--now .player-bar__mode {
+    grid-area: mode;
+  }
+
+  .player-bar--now .player-bar__transport {
+    grid-area: mid;
     display: flex;
+    justify-content: center;
+    gap: 0.7rem;
   }
 
-  .player-now__lyric-col {
-    width: 100%;
-    max-width: none;
-    height: auto;
-    flex: 1;
+  .player-bar--now .player-bar__right {
+    grid-area: queue;
+    justify-content: flex-end;
+  }
+
+  .player-bar--now .player-ctrl {
+    min-width: 3.05rem;
+    min-height: 3.05rem;
+    font-size: 1.35rem;
+  }
+
+  .player-bar--now .player-hub {
+    width: 3.65rem;
+    height: 3.65rem;
+    min-width: 3.65rem;
+    min-height: 3.65rem;
+    border-width: 2.5px;
+  }
+
+  .player-bar--now .player-groove {
+    height: 5px;
+  }
+
+  .player-bar--now .player-groove::-webkit-slider-thumb,
+  .player-bar--now .player-groove::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    opacity: 1;
+  }
+
+  .player-bar--now .player-bar__clock {
+    width: 2.5rem;
+    font-size: 0.78rem;
   }
 
   .player-queue {
-    right: 0.4rem;
-    left: 0.4rem;
-    width: auto;
-    bottom: calc(var(--chrome-bottom) + 0.4rem);
+    left: auto;
+    right: 0.85rem;
+    width: min(19.5rem, calc(100vw - 2.75rem));
+    margin: 0;
+    height: min(28rem, 50vh);
+    bottom: calc(var(--chrome-bottom) + 0.7rem);
+    border-radius: 0.85rem;
+  }
+
+  .player-queue__scrim {
+    background: color-mix(in srgb, #000 22%, transparent);
+  }
+
+  .player-queue__head {
+    padding: 0.7rem 0.65rem 0.7rem 1.1rem;
+  }
+
+  .player-queue__title {
+    font-size: 0.95rem;
+  }
+
+  .player-queue__item {
+    padding: 0 0.4rem;
+  }
+
+  .player-queue__jump {
+    gap: 0.75rem;
+    padding: 0.72rem 0.45rem;
+  }
+
+  .player-queue__name {
+    font-size: 0.92rem;
+  }
+
+  .player-queue__singer {
+    font-size: 0.76rem;
+  }
+
+  .player-queue .player-ctrl--sm {
+    min-width: 2.65rem;
+    min-height: 2.65rem;
   }
 
   .player-car__body {
@@ -1474,10 +1433,16 @@ html[data-theme-mode='light'] .player-bar__badge {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .player-now,
   .player-car,
   .player-queue {
     animation: none;
+  }
+
+  .queue-scrim-enter-active,
+  .queue-scrim-leave-active,
+  .queue-pop-enter-active,
+  .queue-pop-leave-active {
+    transition: none;
   }
 
   .player-ctrl,

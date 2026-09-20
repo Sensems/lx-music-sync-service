@@ -27,6 +27,14 @@ html.has-player {
   --player-h: 4.85rem;
 }
 
+html.is-now {
+  --ribbon-h: 0px;
+}
+
+html.is-now.has-player {
+  --player-h: calc(4.85rem + var(--safe-b));
+}
+
 html,
 body,
 #app {
@@ -278,7 +286,11 @@ html[data-theme-mode='light'] .schedule-time {
   }
 
   html.has-player {
-    --player-h: 4.7rem;
+    --player-h: 5.85rem;
+  }
+
+  html.is-now.has-player {
+    --player-h: calc(8.35rem + var(--safe-b));
   }
 
   .ant-input,
@@ -312,5 +324,9 @@ html[data-theme-mode='light'] .schedule-time {
 
   html.has-player {
     --player-h: 4.5rem;
+  }
+
+  html.is-now.has-player {
+    --player-h: calc(6.2rem + var(--safe-b));
   }
 }

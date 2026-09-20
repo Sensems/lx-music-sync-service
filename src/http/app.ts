@@ -77,33 +77,32 @@ function asMusicInfo(body: Record<string, unknown>): MusicInfo | null {
 
 type LyricDownloadOverlay = Pick<DownloadRow, 'name' | 'singer' | 'source' | 'pic_url'>
 
+function cleanPicUrl(raw: unknown): string {
+  const s = String(raw || '').trim()
+  return !s || s === 'null' || s === 'undefined' ? '' : s
+}
+
 function lyricDisplayFields(musicInfo: MusicInfo, row?: LyricDownloadOverlay) {
   return {
     name: row?.name || musicInfo.name,
     singer: row?.singer || musicInfo.singer,
     source: row?.source || musicInfo.source,
-    picUrl: row?.pic_url || String(musicInfo.meta?.picUrl || ''),
+    picUrl: cleanPicUrl(row?.pic_url || musicInfo.meta?.picUrl),
   }
 }
 
 async function lyricPayload(songKey: string, musicInfo: MusicInfo, row?: LyricDownloadOverlay) {
-  const display = lyricDisplayFields(musicInfo, row)
-  try {
-    const { getLyricForMusic } = await import('../services/lyrics.js')
-    const lyric = await getLyricForMusic(musicInfo)
-    return {
-      songKey,
-      ...display,
-      lyric: lyric.lyric || '',
-      tlyric: lyric.tlyric || '',
-    }
-  } catch {
-    return {
-      songKey,
-      ...display,
-      lyric: '',
-      tlyric: '',
-    }
+  const { getLyricForMusic } = await import('../services/lyrics.js')
+  const { ensureMusicPic } = await import('../services/pic.js')
+  const [enriched, lyric] = await Promise.all([
+    row?.pic_url ? musicInfo : ensureMusicPic(musicInfo).catch(() => musicInfo),
+    getLyricForMusic(musicInfo).catch(() => ({ lyric: '', tlyric: '' })),
+  ])
+  return {
+    songKey,
+    ...lyricDisplayFields(enriched, row),
+    lyric: lyric.lyric || '',
+    tlyric: lyric.tlyric || '',
   }
 }
 

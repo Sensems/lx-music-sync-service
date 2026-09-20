@@ -36,6 +36,7 @@ export interface SearchHit {
   source: SourceId
   interval?: number | null
   meta?: Record<string, unknown>
+  picUrl?: string
 }
 
 export interface JobLine {

@@ -3,8 +3,8 @@ defineProps<{
   picUrl: string
   name: string
   playing?: boolean
-  /** thumb：底栏方封面；disc：展开页唱片 */
-  variant?: 'thumb' | 'disc'
+  /** thumb：底栏方封面；disc：桌面展开页唱片；cover：移动端大封面 */
+  variant?: 'thumb' | 'disc' | 'cover'
   open?: boolean
 }>()
 </script>
@@ -21,6 +21,15 @@ defineProps<{
       <span v-if="open" class="i-lucide-chevron-down" />
       <span v-else class="i-lucide-chevron-up" />
     </span>
+  </div>
+
+  <div
+    v-else-if="variant === 'cover'"
+    class="player-cover"
+    :class="playing ? 'is-on' : ''"
+  >
+    <img v-if="picUrl" :src="picUrl" :alt="name" />
+    <span v-else class="i-lucide-disc-3 player-cover__empty" aria-hidden="true" />
   </div>
 
   <div
@@ -80,11 +89,37 @@ defineProps<{
   opacity: 1;
 }
 
-.player-cd {
-  width: min(20rem, 42vw);
+.player-cover {
+  width: min(18.5rem, 78vw);
   aspect-ratio: 1;
   flex-shrink: 0;
-  filter: drop-shadow(0 18px 40px color-mix(in srgb, #000 45%, transparent));
+  border-radius: 0.85rem;
+  overflow: hidden;
+  background: var(--elevated);
+  box-shadow: 0 22px 48px color-mix(in srgb, #000 42%, transparent);
+}
+
+.player-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.player-cover__empty {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  font-size: 3.4rem;
+  color: color-mix(in srgb, var(--foil) 78%, var(--mute));
+}
+
+.player-cd {
+  width: min(34rem, 52vmin, calc(100dvh - 16rem));
+  aspect-ratio: 1;
+  flex-shrink: 0;
+  filter: drop-shadow(0 22px 48px color-mix(in srgb, #000 42%, transparent));
 }
 
 .player-cd__spin {
@@ -146,8 +181,8 @@ defineProps<{
 
 @media (max-width: 767px) {
   .player-thumb {
-    width: 2.75rem;
-    height: 2.75rem;
+    width: 3.25rem;
+    height: 3.25rem;
   }
 
   .player-cd {

@@ -30,14 +30,22 @@ async function runSearch() {
   searched.value = true
   try {
     const body = await api.search(source.value, q.value.trim())
-    hits.value = (body.list ?? []).map((m: Record<string, unknown>) => ({
-      songKey: String(m.id),
-      name: String(m.name ?? ''),
-      singer: String(m.singer ?? ''),
-      source: m.source as SourceId,
-      interval: (m.interval as number | null | undefined) ?? null,
-      meta: (m.meta as Record<string, unknown>) ?? {},
-    }))
+    hits.value = (body.list ?? []).map((m: Record<string, unknown>) => {
+      const meta =
+        m.meta && typeof m.meta === 'object' && !Array.isArray(m.meta)
+          ? { ...(m.meta as Record<string, unknown>) }
+          : {}
+      const pic = String(meta.picUrl || m.img || '')
+      return {
+        songKey: String(m.id ?? ''),
+        name: String(m.name ?? ''),
+        singer: String(m.singer ?? ''),
+        source: m.source as SourceId,
+        interval: typeof m.interval === 'number' ? m.interval : null,
+        meta,
+        picUrl: pic && pic !== 'null' && pic !== 'undefined' ? pic : '',
+      }
+    })
   } catch (err) {
     hits.value = []
     message.error(err instanceof Error ? err.message : '搜索失败')
@@ -47,11 +55,12 @@ async function runSearch() {
 }
 
 function toItem(h: SearchHit): PlayItem {
+  const pic = String(h.picUrl || h.meta?.picUrl || '')
   return {
     songKey: h.songKey,
     name: h.name,
     singer: h.singer,
-    picUrl: String(h.meta?.picUrl || ''),
+    picUrl: pic && pic !== 'null' && pic !== 'undefined' ? pic : '',
     source: h.source,
     musicInfo: {
       id: h.songKey,

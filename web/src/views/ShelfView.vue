@@ -156,10 +156,10 @@ onMounted(() => {
 
 <template>
   <section>
-    <p class="text-mute text-sm mb-3 md:mb-4">选择歌单查看曲目；点「+」添加新歌单。</p>
-    <div class="flex flex-col lg:flex-row gap-6 items-stretch">
+    <p class="text-mute text-sm mb-2.5 md:mb-3">选择歌单查看曲目；点「+」添加新歌单。</p>
+    <div class="shelf">
       <div
-        class="shelf-spines flex gap-3 overflow-x-auto py-2 pr-2 stagger-in"
+        class="shelf-spines stagger-in"
         role="listbox"
         aria-label="歌单列表"
       >
@@ -172,7 +172,7 @@ onMounted(() => {
         />
         <RecordSpine insert @pick="showInsert = true" />
       </div>
-      <div class="flex-1 min-w-0">
+      <div class="shelf-sleeve">
         <SleevePanel
           v-if="selected"
           :playlist="selected"
@@ -214,11 +214,29 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.shelf {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
 .shelf-spines {
+  --spine-h: 8.75rem;
+  --spine-w: 2.55rem;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 0.4rem;
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  flex-shrink: 0;
+  flex: 0 0 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.3rem 0.2rem 0.45rem 0.1rem;
+  max-height: calc(var(--spine-h) + 0.75rem);
   scroll-snap-type: x mandatory;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
@@ -229,12 +247,43 @@ onMounted(() => {
   scroll-snap-align: start;
 }
 
-@media (min-width: 1024px) {
+.shelf-sleeve {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+@media (min-width: 768px) {
+  .shelf {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 1.15rem;
+  }
+
   .shelf-spines {
-    width: min(22rem, 38vw);
-    max-width: 38vw;
+    --spine-h: 11rem;
+    --spine-w: 2.75rem;
+    --spine-cols: 2;
+    width: calc(var(--spine-w) * var(--spine-cols) + 0.4rem * (var(--spine-cols) - 1) + 1.4rem);
+    max-width: 32vw;
     flex: 0 0 auto;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
     scroll-snap-type: none;
+    /* 预留顶栏 + 底栏，避免歌脊栏伸进播放条 */
+    max-height: min(32rem, calc(100dvh - var(--chrome-bottom) - 13.5rem));
+    position: sticky;
+    top: 0.6rem;
+  }
+}
+
+@media (min-width: 1100px) {
+  .shelf-spines {
+    --spine-h: 12rem;
+    --spine-w: 2.9rem;
+    --spine-cols: 3;
   }
 }
 </style>
