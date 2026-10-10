@@ -3,8 +3,10 @@ import { join, resolve } from 'node:path'
 import { serve as honoServe } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import cron from 'node-cron'
+import type { Pool } from 'pg'
 import { loadConfig, type AppConfig } from './config.js'
 import { openDb } from './db/index.js'
+import { migrate, openPool } from './db/pg.js'
 import { createRepos } from './db/repos.js'
 import { downloadFile } from './download/downloader.js'
 import { createApp, type AppCtx } from './http/app.js'
@@ -14,7 +16,8 @@ import { createPlaylistService } from './services/playlists.js'
 import { createSearchService } from './services/search.js'
 import { createStreamService } from './services/stream.js'
 import { createSyncService } from './services/sync.js'
-import type { Quality } from './types.js'
+import { mountSubsonic } from './subsonic/routes.js'
+import type { MusicInfo, Quality } from './types.js'
 import { createUserApiRuntime } from './userApi/runtime.js'
 
 export type CronSettings = {
@@ -86,12 +89,26 @@ export function startCron(deps: CronDeps): CronHandle {
   return { stop, reschedule }
 }
 
-export async function createAppContext(config?: AppConfig): Promise<AppCtx> {
+export type ServeContext = AppCtx & {
+  pool: Pool
+  getMusicUrl: (source: string, musicInfo: MusicInfo, quality: Quality) => Promise<{ type: Quality; url: string }>
+}
+
+export async function createAppContext(config?: AppConfig): Promise<ServeContext> {
   const cfg = config ?? loadConfig()
   const cwd = process.cwd()
   const dataDir = resolve(cwd, cfg.dataDir)
   mkdirSync(dataDir, { recursive: true })
   mkdirSync(join(dataDir, 'user-api'), { recursive: true })
+
+  // 曲库在 Postgres。失败就关掉池再抛，避免连接把进程留住。SQLite 仍留给旧 /api。
+  const pool = openPool(cfg.databaseUrl)
+  try {
+    await migrate(pool)
+  } catch (err) {
+    await pool.end().catch(() => {})
+    throw err
+  }
 
   const db = openDb(join(dataDir, 'lx-sync.db'))
   const repos = createRepos(db)
@@ -133,6 +150,8 @@ export async function createAppContext(config?: AppConfig): Promise<AppCtx> {
       getStatus: () => runtime.getStatus(),
       setProxy: proxy => runtime.setProxy(proxy),
     },
+    pool,
+    getMusicUrl: (source, musicInfo, quality) => runtime.getMusicUrl(source, musicInfo, quality),
   }
 }
 
@@ -148,51 +167,63 @@ export async function startServe(opts: ServeOptions = {}): Promise<void> {
   const config = loadConfig()
   const ctx = await createAppContext(config)
 
-  let cronHandle: CronHandle | null = null
-  if (withCron) {
-    cronHandle = startCron({
-      getSettings: () => ctx.repos.settings.getAll(),
-      schedule: (expr, fn) => cron.schedule(expr, fn),
-      syncAll: () => ctx.sync.syncAll(),
+  try {
+    let cronHandle: CronHandle | null = null
+    if (withCron) {
+      cronHandle = startCron({
+        getSettings: () => ctx.repos.settings.getAll(),
+        schedule: (expr, fn) => cron.schedule(expr, fn),
+        syncAll: () => ctx.sync.syncAll(),
+      })
+      ctx.rescheduleCron = () => cronHandle?.reschedule()
+    }
+
+    const app = createApp(ctx)
+    // 后面的静态 * 会把没匹配到的 GET 收成网页。Subsonic 要先挂上。
+    mountSubsonic(app, {
+      dataDir: ctx.dataDir,
+      pool: ctx.pool,
+      getMusicUrl: ctx.getMusicUrl,
+      getStatus: () => ctx.runtime.getStatus(),
     })
-    ctx.rescheduleCron = () => cronHandle?.reschedule()
-  }
 
-  const app = createApp(ctx)
-
-  if (withStatic) {
-    const distRoot = resolve(process.cwd(), 'web/dist')
-    if (!existsSync(distRoot)) {
-      console.warn(`web/dist missing at ${distRoot}; run: npm --prefix web run build`)
+    if (withStatic) {
+      const distRoot = resolve(process.cwd(), 'web/dist')
+      if (!existsSync(distRoot)) {
+        console.warn(`web/dist missing at ${distRoot}; run: npm --prefix web run build`)
+      }
+      app.use(
+        '/*',
+        serveStatic({
+          root: './web/dist',
+        }),
+      )
+      app.get('*', serveStatic({ path: './web/dist/index.html' }))
     }
-    app.use(
-      '/*',
-      serveStatic({
-        root: './web/dist',
-      }),
+
+    const server = honoServe(
+      {
+        fetch: app.fetch,
+        hostname: config.host,
+        port: config.port,
+      },
+      info => {
+        console.log(`lx-sync listening on http://${config.host}:${info.port}`)
+      },
     )
-    app.get('*', serveStatic({ path: './web/dist/index.html' }))
+
+    // Keep the CLI process alive until the HTTP server closes (SIGINT/SIGTERM).
+    await new Promise<void>((resolve, reject) => {
+      const shutdown = () => {
+        cronHandle?.stop()
+        server.close(err => (err ? reject(err) : resolve()))
+      }
+      process.once('SIGINT', shutdown)
+      process.once('SIGTERM', shutdown)
+      server.once('error', reject)
+    })
+  } finally {
+    // 池不关的话套接字还在，进程收不到退出。
+    await ctx.pool.end().catch(() => {})
   }
-
-  const server = honoServe(
-    {
-      fetch: app.fetch,
-      hostname: config.host,
-      port: config.port,
-    },
-    info => {
-      console.log(`lx-sync listening on http://${config.host}:${info.port}`)
-    },
-  )
-
-  // Keep the CLI process alive until the HTTP server closes (SIGINT/SIGTERM).
-  await new Promise<void>((resolve, reject) => {
-    const shutdown = () => {
-      cronHandle?.stop()
-      server.close(err => (err ? reject(err) : resolve()))
-    }
-    process.once('SIGINT', shutdown)
-    process.once('SIGTERM', shutdown)
-    server.once('error', reject)
-  })
 }
