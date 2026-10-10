@@ -236,3 +236,53 @@ export async function upsertTrack(
   await attachSource(client, track, songId)
   return { songId, hit: 'created' }
 }
+
+/**
+ * 扫描到的文件没有 tinggui 平台注释时走这里。
+ * 不写 song_sources：凭空补一条 wy 会占住平台身份，播放也会拿着空 raw 去取地址。
+ * 歌手或专辑留空时用占位名，和在线入库一样，避免空串占住 artists.name 的唯一键。
+ */
+export async function insertSongWithoutSource(
+  client: PoolClient,
+  input: {
+    title: string
+    singers: string[]
+    albumTitle: string
+    durationMs: number | null
+    trackNo: number | null
+    discNo: number | null
+  },
+): Promise<{ songId: string }> {
+  const singers = singerList(input.singers)
+  const album = albumName(input.albumTitle)
+  const collapsedTitle = collapseSpace(input.title)
+  // 空标题在列表里是空白行。刮削入库同样落到「未知歌曲」。
+  const title = collapsedTitle.length > 0 ? collapsedTitle : '未知歌曲'
+
+  const cache = new Map<string, string>()
+  const artistIds: string[] = []
+  for (const name of singers.names) {
+    artistIds.push(await ensureArtist(client, name, cache))
+  }
+  const albumArtistId = artistIds[0]
+  if (!albumArtistId) throw new Error('album artist missing')
+  const albumId = await ensureAlbum(client, albumArtistId, album.title)
+
+  const inserted = await client.query<{ id: string }>(
+    `INSERT INTO songs (title, album_id, duration_ms, track_no, disc_no)
+     VALUES ($1, $2::bigint, $3, $4, $5)
+     RETURNING id::text AS id`,
+    [title, albumId, input.durationMs, input.trackNo, input.discNo],
+  )
+  const songId = inserted.rows[0]?.id
+  if (!songId) throw new Error('song missing after insert')
+
+  for (let position = 0; position < artistIds.length; position++) {
+    await client.query(
+      `INSERT INTO song_artists (song_id, artist_id, position)
+       VALUES ($1::bigint, $2::bigint, $3)`,
+      [songId, artistIds[position], position],
+    )
+  }
+  return { songId }
+}
