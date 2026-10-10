@@ -7,6 +7,7 @@ export type AppConfig = {
   port: number
   dataDir: string
   logLevel: string
+  databaseUrl: string
 }
 
 const DEFAULTS: AppConfig = {
@@ -14,6 +15,7 @@ const DEFAULTS: AppConfig = {
   port: 8787,
   dataDir: './data',
   logLevel: 'info',
+  databaseUrl: '',
 }
 
 export type LoadConfigOptions = {
@@ -46,5 +48,6 @@ export function loadConfig(opts: LoadConfigOptions = {}): AppConfig {
     port: Number.isFinite(port) && port > 0 ? port : DEFAULTS.port,
     dataDir: String(fileCfg.dataDir ?? DEFAULTS.dataDir),
     logLevel: String(fileCfg.logLevel ?? DEFAULTS.logLevel),
+    databaseUrl: String(fileCfg.databaseUrl ?? ''),
   }
 }

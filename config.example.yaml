@@ -13,3 +13,6 @@ dataDir: ./data
 
 # 日志级别：debug | info | warn | error
 logLevel: info
+
+# Postgres 连接串。config.yaml 已被 gitignore。
+# databaseUrl: postgresql://USER:PASSWORD@HOST:5432/tinggui
