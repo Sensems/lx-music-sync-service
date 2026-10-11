@@ -1,14 +1,14 @@
 # 部署与运维（PM2）
 
-日期：2026-09-14  
+日期：2026-10-11  
 状态：已实现
 
 ## 前置条件
 
 - Linux 服务器（WSL / Git Bash 也可以），Node.js 20+，建议与开发机一致的 22
 - PM2：`npm i -g pm2`
-- 编译 better-sqlite3 需要 `python3`、`make`、`g++`（能命中预编译包就不需要）
-- 服务器能访问各音乐平台，必要时在「设置」里打开代理
+- **单独安装的 Postgres**。曲库不在 SQLite 里。`config.yaml` 必须写上 `databaseUrl`
+- 服务器能访问各音乐平台，必要时用环境变量给 SDK 配代理
 
 ## 一键部署
 
@@ -30,6 +30,8 @@ npm i -g pm2
 
 以后每次更新，同样跑 `./scripts/deploy.sh` 就行。
 
+把 `config.example.yaml` 复制成 `config.yaml` 之后，补上 `databaseUrl`。不要把真实连接串写进仓库。
+
 ### 参数与环境变量
 
 | 参数 / 变量 | 作用 |
@@ -47,12 +49,14 @@ npm i -g pm2
 HOST=0.0.0.0 USER_API_SCRIPT=/tmp/current.js ./scripts/deploy.sh
 ```
 
+默认仍只听 `127.0.0.1`。改成对外监听之前，先在设置里写上 Subsonic 口令。没设口令时，非回环请求鉴权失败。
+
 ## 两样必须自己准备的东西
 
 - **音源脚本 `data/user-api/current.js`**：`data/` 被 git 忽略，脚本不会随仓库走。没有它接口返回
-  `sourceOk=false`，搜索和下载都拿不到播放地址。
+  `sourceOk=false`，搜索和点播都拿不到播放地址。
 - **`config.yaml`**：默认 `host: 127.0.0.1`，只有本机能访问。要么改成 `0.0.0.0`，要么用 nginx 反代。
-  注意本服务**没有登录鉴权**，直接暴露到公网等于把下载能力开放给所有人。
+  注意管理接口**没有登录鉴权**，直接暴露到公网等于把曲库管理开放给所有人。Subsonic 靠口令挡住非回环请求。
 
 ## nginx 反向代理
 
@@ -66,7 +70,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_read_timeout 300s;   # 同步、下载接口耗时长
+        proxy_read_timeout 300s;   # 扫描、缓存接口耗时长
     }
 }
 ```
@@ -89,25 +93,24 @@ pm2 restart lx-music-sync
 ```
 
 - **EADDRINUSE（端口被占）**：`pm2 delete lx-music-sync && ./scripts/deploy.sh --no-pull`
-- **better-sqlite3 编译失败**：`apt install -y python3 make g++`，然后
-  `./scripts/deploy.sh --no-pull --skip-build`
 - **页面 404 但接口正常**：`web/dist` 不存在，跑 `--skip-install` 补一次构建
-- **搜索/下载报音源未加载**：补 `data/user-api/current.js` 后 `pm2 restart lx-music-sync`
+- **搜索/点播报音源未加载**：补 `data/user-api/current.js` 后 `pm2 restart lx-music-sync`
+- **启动时报数据库连不上**：确认本机 Postgres 已启动，且 `config.yaml` 的 `databaseUrl` 指向那份库
 
 ## 数据与备份
 
-运行期数据都在 `data/`：
+曲库在 Postgres。运行期文件仍在 `data/`：
 
 | 路径 | 内容 |
 | --- | --- |
-| `data/lx-sync.db` | SQLite 库（歌单、曲目、下载记录、任务、设置） |
-| `data/music/` | 下载的音频文件 |
+| Postgres | 歌手、专辑、歌曲、歌单、任务、设置 |
+| `data/cache/` | 按歌曲缓存的音频 |
 | `data/user-api/current.js` | 音源脚本 |
+| `data/subsonic.key` | 还原 Subsonic 口令的密钥 |
 
-备份就是打包整个 `data/`；只备份数据库的话，注意 SQLite 开了 WAL，要连着
-`lx-sync.db-wal`、`lx-sync.db-shm` 一起拷，或者先 `pm2 stop lx-music-sync`。
+备份要同时带上 Postgres 和整个 `data/`。`data/lx-sync.db` 是旧版 SQLite，新曲库不会读它。
 
 ## 单进程约束
 
-better-sqlite3 是同步单连接，服务也只监听一个端口，所以 PM2 必须 fork 模式、`instances: 1`
+服务只监听一个端口，曲库任务也是进程内串行排队，所以 PM2 必须 fork 模式、`instances: 1`
 （`ecosystem.config.cjs` 里已经固定）。不要改成 cluster 或多实例。

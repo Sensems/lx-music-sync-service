@@ -1,13 +1,30 @@
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Command, CommanderError } from 'commander'
-import type { createRepos } from './db/repos.js'
-import type { AppCtx } from './http/app.js'
 import type { MusicInfo, OnlineSource } from './types.js'
 
-type Repos = ReturnType<typeof createRepos>
-
-export type CliDeps = Pick<AppCtx, 'repos' | 'sync' | 'search'> & {
+export type CliDeps = {
+  repos: {
+    playlists: {
+      insert(input: { source: OnlineSource; url: string }): unknown
+      list(): unknown[]
+      get(id: number): unknown
+      remove(id: number): void
+    }
+  }
+  sync: {
+    syncPlaylist(id: number): Promise<unknown>
+    syncAll(): Promise<unknown>
+    downloadSearch(musicInfo: MusicInfo): Promise<unknown>
+    getRunningProgress(): unknown
+  }
+  search: {
+    searchMusic(
+      source: OnlineSource | 'all',
+      q: string,
+      page: number,
+    ): Promise<{ list: MusicInfo[]; total: number }>
+  }
   log: (line: string) => void
   error: (line: string) => void
   startServe?: (opts: { static: boolean; cron: boolean }) => Promise<void>
@@ -30,11 +47,11 @@ function buildProgram(deps: CliDeps): Command {
   const program = new Command('lx-sync')
   program.exitOverride()
   program.configureOutput({
-    writeOut: str => {
+    writeOut: (str) => {
       const t = str.replace(/\n$/, '')
       if (t) deps.log(t)
     },
-    writeErr: str => {
+    writeErr: (str) => {
       const t = str.replace(/\n$/, '')
       if (t) deps.error(t)
     },
@@ -47,7 +64,7 @@ function buildProgram(deps: CliDeps): Command {
     .description('Add a playlist subscription')
     .requiredOption('--source <source>', 'online source (kw, kg, tx, wy, mg)')
     .requiredOption('--url <url>', 'playlist URL')
-    .action(async opts => {
+    .action(async (opts) => {
       const row = deps.repos.playlists.insert({
         source: opts.source as OnlineSource,
         url: String(opts.url),
@@ -78,7 +95,7 @@ function buildProgram(deps: CliDeps): Command {
     .command('sync')
     .description('Sync playlists')
     .option('--id <id>', 'sync one playlist', (v: string) => Number(v))
-    .action(async opts => {
+    .action(async (opts) => {
       const job =
         opts.id != null && Number.isFinite(opts.id)
           ? await deps.sync.syncPlaylist(opts.id)
@@ -91,7 +108,7 @@ function buildProgram(deps: CliDeps): Command {
     .description('Search music')
     .requiredOption('--source <source>', 'source or all')
     .requiredOption('--q <text>', 'search query')
-    .action(async opts => {
+    .action(async (opts) => {
       const source = String(opts.source) as OnlineSource | 'all'
       const q = String(opts.q)
       const result = await deps.search.searchMusic(source, q, 1)
@@ -103,7 +120,7 @@ function buildProgram(deps: CliDeps): Command {
     .description('Download a track from search')
     .requiredOption('--source <source>', 'online source')
     .requiredOption('--id <id>', 'platform song id')
-    .action(async opts => {
+    .action(async (opts) => {
       const musicInfo = musicInfoFromDownloadOpts(String(opts.source), String(opts.id))
       try {
         const row = await deps.sync.downloadSearch(musicInfo)
@@ -149,15 +166,40 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
 
 export async function createDefaultCliDeps(): Promise<CliDeps> {
   const { createAppContext, startServe } = await import('./serve.js')
-  const ctx = await createAppContext()
+  // 不在这里开池。serve 自己开一份，避免同一进程连上两次 Postgres。
+  let searchCtx: Awaited<ReturnType<typeof createAppContext>> | undefined
+  const ensureSearch = async () => {
+    searchCtx ??= await createAppContext()
+    return searchCtx
+  }
+  const unavailable = () => {
+    throw new Error('not available')
+  }
   return {
-    repos: ctx.repos,
-    sync: ctx.sync,
-    search: ctx.search,
-    log: line => {
+    repos: {
+      playlists: {
+        insert: unavailable,
+        list: unavailable,
+        get: unavailable,
+        remove: unavailable,
+      },
+    },
+    sync: {
+      syncPlaylist: unavailable,
+      syncAll: unavailable,
+      downloadSearch: unavailable,
+      getRunningProgress: () => null,
+    },
+    search: {
+      async searchMusic(source, q, page) {
+        const ctx = await ensureSearch()
+        return ctx.search.searchMusic(source, q, page)
+      },
+    },
+    log: (line) => {
       if (line) console.log(line)
     },
-    error: line => {
+    error: (line) => {
       if (line) console.error(line)
     },
     startServe,
