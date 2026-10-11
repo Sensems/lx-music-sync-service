@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { Hono } from 'hono'
 import type { Context } from 'hono'
-import type { Pool } from 'pg'
+import type { Pool, PoolClient } from 'pg'
 import { coverFile, lyricText } from '../library/artwork.js'
 import { createOpenSong } from '../library/openSong.js'
 import { getLyricForMusic } from '../services/lyrics.js'
@@ -465,7 +465,8 @@ async function getUser(c: Context, deps: SubsonicDeps, format: Format): Promise<
       settingsRole: false,
       downloadRole: true,
       uploadRole: false,
-      playlistRole: false,
+      // 用户歌单的创建和修改在这项里。false 时客户端不放出编辑。
+      playlistRole: true,
       coverArtRole: false,
       commentRole: false,
       podcastRole: false,
@@ -867,6 +868,524 @@ async function getLyricsBySongId(c: Context, deps: SubsonicDeps, format: Format)
   return sendOk(c, { lyricsList: { structuredLyrics } }, format)
 }
 
+const SEARCH_CAP = 500
+const READ_ONLY_PLAYLIST = 'subscription playlist is read-only'
+
+type PlaylistRow = {
+  id: string
+  kind: string
+  name: string
+  created_at: Date | string
+  updated_at: Date | string
+  song_count: number | string
+  duration_ms: number | string | null
+}
+
+type Queryable = Pick<Pool | PoolClient, 'query'>
+
+/**
+ * 改名和换成员必须同一事务。
+ * 回滚失败的连接不能还回池里，否则下一笔会接着脏事务。
+ */
+async function withTx<T>(pool: Pool, run: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect()
+  let broken: Error | undefined
+  try {
+    await client.query('BEGIN')
+    try {
+      const result = await run(client)
+      await client.query('COMMIT')
+      return result
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK')
+      } catch (rollbackErr) {
+        broken = rollbackErr instanceof Error ? rollbackErr : new Error('rollback failed')
+      }
+      throw err
+    }
+  } finally {
+    client.release(broken)
+  }
+}
+
+function isForeignKeyViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && 'code' in err && (err as { code?: unknown }).code === '23503'
+}
+
+/** 参数没出现和出现了但值为空要分开。queries() 把两种都收成空数组。 */
+function queryValues(c: Context, key: string): string[] | undefined {
+  const raw = c.req.url
+  const query = raw.split('#')[0]?.split('?')[1] ?? ''
+  const params = new URLSearchParams(query)
+  if (!params.has(key)) return undefined
+  return params.getAll(key)
+}
+
+/**
+ * 空白的单独一项表示清空。夹在有效 id 里的空值整单拒绝，避免悄悄少一首。
+ * 解析失败返回 null，调用方按找不到处理，不把非法 id 送进 ::bigint。
+ */
+function parseSongIdList(values: string[]): string[] | null {
+  if (values.length === 1 && values[0]?.trim() === '') return []
+  const ids: string[] = []
+  for (const value of values) {
+    const id = parseSongId(value.trim())
+    if (!id) return null
+    ids.push(id)
+  }
+  return ids
+}
+
+function parseTargetIds(
+  values: string[] | undefined,
+  parse: (raw: string | undefined) => string | null,
+): string[] | null {
+  if (!values) return []
+  const ids: string[] = []
+  for (const value of values) {
+    const id = parse(value.trim())
+    if (!id) return null
+    ids.push(id)
+  }
+  return ids
+}
+
+/**
+ * 曲库里没有的 id 不写进去。stars 没有外键，写了会变成看不见的收藏。
+ * 表名只来自下面三个字面量，不是请求参数。
+ */
+async function libraryIdsExist(
+  pool: Pool,
+  table: 'songs' | 'albums' | 'artists',
+  ids: string[],
+): Promise<boolean> {
+  if (ids.length === 0) return true
+  const distinct = [...new Set(ids)]
+  const result = await pool.query<{ n: number | string }>(
+    `SELECT COUNT(*)::int AS n FROM ${table} WHERE id::text = ANY($1::text[])`,
+    [distinct],
+  )
+  return countOf(result.rows[0]?.n ?? 0) === distinct.length
+}
+
+async function missingSongIds(db: Queryable, songIds: string[]): Promise<boolean> {
+  if (songIds.length === 0) return false
+  const distinct = [...new Set(songIds)]
+  const result = await db.query(
+    `SELECT 1
+     FROM unnest($1::text[]) AS t(song_id)
+     LEFT JOIN songs s ON s.id = t.song_id::bigint
+     WHERE s.id IS NULL
+     LIMIT 1`,
+    [distinct],
+  )
+  return (result.rowCount ?? 0) > 0
+}
+
+const PLAYLIST_FIELDS = `
+p.id::text AS id,
+p.kind,
+p.name,
+p.created_at,
+p.updated_at,
+COUNT(pi.song_id)::int AS song_count,
+COALESCE(SUM(s.duration_ms), 0)::bigint AS duration_ms
+`
+
+async function loadPlaylist(db: Queryable, id: string): Promise<PlaylistRow | null> {
+  const result = await db.query<PlaylistRow>(
+    `SELECT ${PLAYLIST_FIELDS}
+     FROM playlists p
+     LEFT JOIN playlist_items pi ON pi.playlist_id = p.id
+     LEFT JOIN songs s ON s.id = pi.song_id
+     WHERE p.id = $1::bigint
+     GROUP BY p.id`,
+    [id],
+  )
+  return result.rows[0] ?? null
+}
+
+async function playlistSongs(db: Queryable, playlistId: string): Promise<SongRow[]> {
+  const result = await db.query<SongRow>(
+    `SELECT ${SONG_FIELDS}
+     ${SONG_FROM}
+     JOIN playlist_items pi ON pi.song_id = s.id
+     WHERE pi.playlist_id = $1::bigint
+     ORDER BY pi.position ASC`,
+    [playlistId],
+  )
+  return result.rows
+}
+
+/**
+ * 订阅歌单只读，用 comment 标出来。
+ * 用户歌单不带 comment。changed 用库里的 updated_at，不另算时间。
+ */
+function playlistJson(
+  row: PlaylistRow,
+  owner: string,
+  entries?: Record<string, unknown>[],
+): Record<string, unknown> {
+  const playlist: Record<string, unknown> = {
+    id: row.id,
+    name: row.name,
+    owner,
+    public: false,
+    songCount: countOf(row.song_count),
+    duration: durationSeconds(row.duration_ms),
+    created: isoTime(row.created_at),
+    changed: isoTime(row.updated_at),
+  }
+  if (row.kind === 'subscription') playlist.comment = 'subscription'
+  if (entries) playlist.entry = entries
+  return playlist
+}
+
+/** position 从 0 起，和订阅刷新写入 playlist_items 的顺序一致。重复的 songId 各占一位。 */
+async function replacePlaylistItems(client: PoolClient, playlistId: string, songIds: string[]): Promise<void> {
+  await client.query('DELETE FROM playlist_items WHERE playlist_id = $1::bigint', [playlistId])
+  if (songIds.length === 0) return
+  await client.query(
+    `INSERT INTO playlist_items (playlist_id, position, song_id)
+     SELECT $1::bigint, ordinality - 1, song_id::bigint
+     FROM unnest($2::text[]) WITH ORDINALITY AS t(song_id, ordinality)`,
+    [playlistId, songIds],
+  )
+}
+
+async function getPlaylists(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
+  const owner = await readUser(deps.pool)
+  const result = await deps.pool.query<PlaylistRow>(
+    `SELECT ${PLAYLIST_FIELDS}
+     FROM playlists p
+     LEFT JOIN playlist_items pi ON pi.playlist_id = p.id
+     LEFT JOIN songs s ON s.id = pi.song_id
+     GROUP BY p.id
+     ORDER BY p.id ASC`,
+  )
+  return sendOk(c, {
+    playlists: {
+      playlist: result.rows.map((row) => playlistJson(row, owner)),
+    },
+  }, format)
+}
+
+async function getPlaylist(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
+  const raw = c.req.query('id')?.trim()
+  if (!raw) return missing(c, format)
+  const id = parseSongId(raw)
+  if (!id) return notFound(c, format)
+  const row = await loadPlaylist(deps.pool, id)
+  if (!row) return notFound(c, format)
+  const owner = await readUser(deps.pool)
+  const songs = await playlistSongs(deps.pool, id)
+  return sendOk(c, {
+    playlist: playlistJson(row, owner, songs.map((song) => songJson(song))),
+  }, format)
+}
+
+async function createPlaylist(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
+  const rawName = c.req.query('name')
+  // 缺省或空白在列表里没有名字，用固定标题，避免客户端画出一行空的。
+  const name = rawName == null || rawName.trim() === '' ? '新建歌单' : rawName.trim()
+  const listed = queryValues(c, 'songId') ?? []
+  const songIds = parseSongIdList(listed)
+  if (!songIds) return notFound(c, format)
+  if (await missingSongIds(deps.pool, songIds)) return notFound(c, format)
+  const owner = await readUser(deps.pool)
+  let playlistId: string
+  try {
+    playlistId = await withTx(deps.pool, async (client) => {
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO playlists (kind, name)
+         VALUES ('user', $1)
+         RETURNING id::text AS id`,
+        [name],
+      )
+      const id = inserted.rows[0]?.id
+      if (!id) throw new Error('playlist missing after insert')
+      await replacePlaylistItems(client, id, songIds)
+      return id
+    })
+  } catch (err) {
+    if (isForeignKeyViolation(err)) return notFound(c, format)
+    throw err
+  }
+  const row = await loadPlaylist(deps.pool, playlistId)
+  if (!row) return notFound(c, format)
+  const songs = await playlistSongs(deps.pool, playlistId)
+  return sendOk(c, {
+    playlist: playlistJson(row, owner, songs.map((song) => songJson(song))),
+  }, format)
+}
+
+async function updatePlaylist(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
+  const rawId = c.req.query('playlistId')?.trim()
+  if (!rawId) return missing(c, format)
+  const id = parseSongId(rawId)
+  if (!id) return notFound(c, format)
+  const found = await deps.pool.query<{ kind: string }>(
+    'SELECT kind FROM playlists WHERE id = $1::bigint',
+    [id],
+  )
+  const kind = found.rows[0]?.kind
+  if (!kind) return notFound(c, format)
+  // 订阅成员只走刷新。这里改名或换歌会把在线歌单和库里的列表拆开。
+  if (kind === 'subscription') return sendErr(c, 50, READ_ONLY_PLAYLIST, format)
+
+  const nameRaw = c.req.query('name')
+  const nextName = nameRaw === undefined ? undefined : nameRaw.trim()
+  const rename = nextName !== undefined && nextName !== ''
+  const songValues = queryValues(c, 'songId')
+  let songIds: string[] | undefined
+  if (songValues !== undefined) {
+    const parsed = parseSongIdList(songValues)
+    if (!parsed) return notFound(c, format)
+    if (await missingSongIds(deps.pool, parsed)) return notFound(c, format)
+    songIds = parsed
+  }
+  if (!rename && songIds === undefined) return sendOk(c, {}, format)
+
+  try {
+    const applied = await withTx(deps.pool, async (client) => {
+      // 检查之后若行没了，不能把编辑写到别的歌单上。
+      const still = await client.query<{ kind: string }>(
+        'SELECT kind FROM playlists WHERE id = $1::bigint FOR UPDATE',
+        [id],
+      )
+      if (still.rows[0]?.kind !== 'user') return false
+      if (songIds !== undefined) await replacePlaylistItems(client, id, songIds)
+      if (rename) {
+        await client.query(
+          `UPDATE playlists
+           SET name = $2, updated_at = now()
+           WHERE id = $1::bigint AND kind = 'user'`,
+          [id, nextName],
+        )
+      } else {
+        await client.query(
+          `UPDATE playlists
+           SET updated_at = now()
+           WHERE id = $1::bigint AND kind = 'user'`,
+          [id],
+        )
+      }
+      return true
+    })
+    if (!applied) return notFound(c, format)
+  } catch (err) {
+    if (isForeignKeyViolation(err)) return notFound(c, format)
+    throw err
+  }
+  return sendOk(c, {}, format)
+}
+
+async function deletePlaylist(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
+  const raw = c.req.query('id')?.trim()
+  if (!raw) return missing(c, format)
+  const id = parseSongId(raw)
+  if (!id) return notFound(c, format)
+  const found = await deps.pool.query<{ kind: string }>(
+    'SELECT kind FROM playlists WHERE id = $1::bigint',
+    [id],
+  )
+  const kind = found.rows[0]?.kind
+  if (!kind) return notFound(c, format)
+  if (kind === 'subscription') return sendErr(c, 50, READ_ONLY_PLAYLIST, format)
+  // 只删歌单行。playlist_items 随外键级联，歌曲和文件留着。
+  await deps.pool.query(
+    `DELETE FROM playlists WHERE id = $1::bigint AND kind = 'user'`,
+    [id],
+  )
+  return sendOk(c, {}, format)
+}
+
+/**
+ * 只查 Postgres。在线搜索不是 Subsonic 的 search2 / search3。
+ * 一个搜索框对着歌名、专辑名、歌手名，所以歌曲和专辑不只匹配自己的标题。
+ */
+async function searchLibrary(
+  c: Context,
+  deps: SubsonicDeps,
+  format: Format,
+  key: 'searchResult2' | 'searchResult3',
+): Promise<Response> {
+  const query = c.req.query('query')
+  if (query === undefined) return missing(c, format)
+  const empty = { artist: [], album: [], song: [] }
+  // 只有 1 号文件夹是这座库。别的编号不能把整库搜出来冒充。
+  if (!folderMatches(c.req.query('musicFolderId'))) {
+    return sendOk(c, { [key]: empty }, format)
+  }
+  // 协议默认各 20。不封顶的话一次请求会把整库吐出去。翻页用 offset，缺省从 0 开始。
+  const artistCount = bounded(c.req.query('artistCount'), 20, SEARCH_CAP)
+  const albumCount = bounded(c.req.query('albumCount'), 20, SEARCH_CAP)
+  const songCount = bounded(c.req.query('songCount'), 20, SEARCH_CAP)
+  const artistOffset = bounded(c.req.query('artistOffset'), 0, 1_000_000)
+  const albumOffset = bounded(c.req.query('albumOffset'), 0, 1_000_000)
+  const songOffset = bounded(c.req.query('songOffset'), 0, 1_000_000)
+
+  const artists = artistCount === 0
+    ? []
+    : (await deps.pool.query<ArtistRow>(
+      `SELECT ar.id::text AS id,
+              ar.name,
+              (SELECT COUNT(*)::int FROM albums al WHERE al.album_artist_id = ar.id) AS album_count
+       FROM artists ar
+       WHERE ar.name ILIKE '%' || $1 || '%'
+       ORDER BY ar.name ASC, ar.id ASC
+       LIMIT $2 OFFSET $3`,
+      [query, artistCount, artistOffset],
+    )).rows
+  const albums = albumCount === 0
+    ? []
+    : await albumsWhere(
+      deps.pool,
+      `WHERE al.title ILIKE '%' || $1 || '%' OR ar.name ILIKE '%' || $1 || '%'`,
+      'al.title ASC, al.id ASC LIMIT $2 OFFSET $3',
+      [query, albumCount, albumOffset],
+    )
+  const songs = songCount === 0
+    ? []
+    : await songsWhere(
+      deps.pool,
+      `WHERE s.title ILIKE '%' || $1 || '%'
+          OR al.title ILIKE '%' || $1 || '%'
+          OR aa.name ILIKE '%' || $1 || '%'
+          OR EXISTS (
+            SELECT 1
+            FROM song_artists sa
+            JOIN artists ar ON ar.id = sa.artist_id
+            WHERE sa.song_id = s.id
+              AND ar.name ILIKE '%' || $1 || '%'
+          )`,
+      's.title ASC, s.id ASC LIMIT $2 OFFSET $3',
+      [query, songCount, songOffset],
+    )
+  return sendOk(c, {
+    [key]: {
+      artist: artists.map((artist) => ({
+        id: artistKey(artist.id),
+        name: artist.name,
+        albumCount: countOf(artist.album_count),
+      })),
+      album: albums.map((album) => albumJson(album)),
+      song: songs.map((song) => songJson(song)),
+    },
+  }, format)
+}
+
+async function writeStars(
+  pool: Pool,
+  songs: string[],
+  albums: string[],
+  artists: string[],
+  mode: 'insert' | 'delete',
+): Promise<void> {
+  const groups = [
+    ['song', songs],
+    ['album', albums],
+    ['artist', artists],
+  ] as const
+  await withTx(pool, async (client) => {
+    for (const [type, ids] of groups) {
+      if (ids.length === 0) continue
+      // 同一次请求里的重复 id 会在一条 INSERT 里自己撞主键。先收成一行。
+      const unique = [...new Set(ids)]
+      if (mode === 'insert') {
+        await client.query(
+          `INSERT INTO stars (target_type, target_id)
+           SELECT $1, id::bigint
+           FROM unnest($2::text[]) AS t(id)
+           ON CONFLICT DO NOTHING`,
+          [type, unique],
+        )
+      } else {
+        await client.query(
+          `DELETE FROM stars
+           WHERE target_type = $1 AND target_id::text = ANY($2::text[])`,
+          [type, unique],
+        )
+      }
+    }
+  })
+}
+
+function starTargets(c: Context): { songs: string[]; albums: string[]; artists: string[] } | null {
+  const songs = parseTargetIds(queryValues(c, 'id'), parseSongId)
+  const albums = parseTargetIds(queryValues(c, 'albumId'), parseAlbumId)
+  const artists = parseTargetIds(queryValues(c, 'artistId'), parseArtistId)
+  if (!songs || !albums || !artists) return null
+  return { songs, albums, artists }
+}
+
+async function star(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
+  const targets = starTargets(c)
+  if (!targets) return notFound(c, format)
+  const { songs, albums, artists } = targets
+  if (songs.length + albums.length + artists.length === 0) return missing(c, format)
+  if (!(await libraryIdsExist(deps.pool, 'songs', songs))) return notFound(c, format)
+  if (!(await libraryIdsExist(deps.pool, 'albums', albums))) return notFound(c, format)
+  if (!(await libraryIdsExist(deps.pool, 'artists', artists))) return notFound(c, format)
+  await writeStars(deps.pool, songs, albums, artists, 'insert')
+  return sendOk(c, {}, format)
+}
+
+async function unstar(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
+  const targets = starTargets(c)
+  if (!targets) return notFound(c, format)
+  const { songs, albums, artists } = targets
+  if (songs.length + albums.length + artists.length === 0) return missing(c, format)
+  // 没收藏过也算成功。重复取消不能让客户端当成失败。
+  await writeStars(deps.pool, songs, albums, artists, 'delete')
+  return sendOk(c, {}, format)
+}
+
+/** 没给 time 时用现在。给了就按毫秒时间戳，对不上就仍然用现在，不把坏时间写成 1970。 */
+function scrobbleInstant(raw: string | undefined): string | null {
+  if (raw == null || raw.trim() === '') return null
+  if (!/^\d+$/.test(raw.trim())) return null
+  const ms = Number(raw.trim())
+  if (!Number.isFinite(ms)) return null
+  const date = new Date(ms)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toISOString()
+}
+
+async function scrobble(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
+  const idValues = queryValues(c, 'id')
+  if (!idValues || idValues.length === 0) return missing(c, format)
+  const songIds = parseSongIdList(idValues)
+  if (!songIds || songIds.length === 0) return notFound(c, format)
+  // 只有明确的 false 表示正在播放。这时成功返回，不写 scrobbles。
+  if (c.req.query('submission')?.trim() === 'false') return sendOk(c, {}, format)
+  if (await missingSongIds(deps.pool, songIds)) return notFound(c, format)
+  const times = queryValues(c, 'time') ?? []
+  try {
+    await withTx(deps.pool, async (client) => {
+      for (let i = 0; i < songIds.length; i++) {
+        const at = scrobbleInstant(times[i])
+        if (at) {
+          await client.query(
+            `INSERT INTO scrobbles (song_id, played_at) VALUES ($1::bigint, $2::timestamptz)`,
+            [songIds[i], at],
+          )
+        } else {
+          await client.query(
+            `INSERT INTO scrobbles (song_id) VALUES ($1::bigint)`,
+            [songIds[i]],
+          )
+        }
+      }
+    })
+  } catch (err) {
+    if (isForeignKeyViolation(err)) return notFound(c, format)
+    throw err
+  }
+  return sendOk(c, {}, format)
+}
+
 /**
  * 播放地址缓存在这一份 openSong 上。每个请求新建的话，拖动进度条会反复问脚本要地址。
  */
@@ -903,6 +1422,16 @@ export function mountSubsonic(app: Hono, deps: SubsonicDeps): void {
     getCoverArt: (c) => getCoverArt(c, deps),
     getLyrics: (c, format) => getLyrics(c, deps, format),
     getLyricsBySongId: (c, format) => getLyricsBySongId(c, deps, format),
+    getPlaylists: (c, format) => getPlaylists(c, deps, format),
+    getPlaylist: (c, format) => getPlaylist(c, deps, format),
+    createPlaylist: (c, format) => createPlaylist(c, deps, format),
+    updatePlaylist: (c, format) => updatePlaylist(c, deps, format),
+    deletePlaylist: (c, format) => deletePlaylist(c, deps, format),
+    search2: (c, format) => searchLibrary(c, deps, format, 'searchResult2'),
+    search3: (c, format) => searchLibrary(c, deps, format, 'searchResult3'),
+    star: (c, format) => star(c, deps, format),
+    unstar: (c, format) => unstar(c, deps, format),
+    scrobble: (c, format) => scrobble(c, deps, format),
   }
 
   app.get('/rest/:view', async (c) => {
