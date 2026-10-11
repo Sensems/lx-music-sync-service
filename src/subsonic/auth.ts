@@ -30,15 +30,19 @@ export async function requireSubsonic(
 }
 
 /**
- * 有 x-forwarded-for 或 forwarded 就说明经过了代理。
- * 代理可以改对端地址，所以这时不算回环，避免没设口令时被冒充成本机。
+ * 有转发头就说明经过了代理（nginx 会写 X-Real-IP 再转到 127.0.0.1）。
+ * 头在就算，空值也算；代理可以改对端地址，没设口令时不能当成本机。
  */
 function isLoopback(c: Context): boolean {
-  if (c.req.header('x-forwarded-for') !== undefined || c.req.header('forwarded') !== undefined) {
+  if (
+    c.req.header('x-forwarded-for') !== undefined
+    || c.req.header('forwarded') !== undefined
+    || c.req.header('x-real-ip') !== undefined
+  ) {
     return false
   }
-  const address = getConnInfo(c).remote.address
-  return address === '127.0.0.1' || address === '::1'
+  const address = (getConnInfo(c).remote.address ?? '').toLowerCase()
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
 }
 
 /** 没写用户名时用 tinggui，和产品名对齐，避免空用户名把所有 u 都拒掉。 */

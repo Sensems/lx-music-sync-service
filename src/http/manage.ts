@@ -1,5 +1,7 @@
 import type { Hono } from 'hono'
+import cron from 'node-cron'
 import type { Pool, PoolClient } from 'pg'
+import { isAllowedSchedule, resolveCronExpression } from '../lib/cronExpr.js'
 import { cachePlaylist, cacheSong } from '../library/cache.js'
 import { ingestTrackFromMusic } from '../library/normalize.js'
 import { setSubsonicPassword } from '../library/password.js'
@@ -215,6 +217,17 @@ function applyCronSnapshot(target: ManageCronSnapshot, partial: Record<string, s
   if ('scheduleTime' in partial) target.scheduleTime = partial.scheduleTime
   if ('cron' in partial) target.cron = partial.cron
   if ('scanWithSchedule' in partial) target.scanWithSchedule = partial.scanWithSchedule
+}
+
+/**
+ * 校验的是合并后真正会拿去 schedule 的表达式。
+ * every-6h / daily 时残留的 cron 字符串不单独判定；未知 schedule 直接拒。
+ */
+function cronWouldBeInvalid(current: ManageCronSnapshot, partial: Record<string, string>): boolean {
+  const merged: ManageCronSnapshot = { ...current }
+  applyCronSnapshot(merged, partial)
+  if (!isAllowedSchedule(merged.schedule)) return true
+  return !cron.validate(resolveCronExpression(merged))
 }
 
 async function settingsPayload(deps: ManageDeps): Promise<Record<string, string | boolean>> {
@@ -587,6 +600,10 @@ export function mountManage(app: Hono, deps: ManageDeps): void {
     if (typeof body.subsonicUser === 'string') partial.subsonicUser = body.subsonicUser
     if (typeof body.subsonicPassword === 'string' && body.subsonicPassword.length > 0) {
       password = body.subsonicPassword
+    }
+
+    if (cronWouldBeInvalid(deps.cronSnapshot, partial)) {
+      return c.json({ error: 'invalid cron' }, 400)
     }
 
     for (const [key, value] of Object.entries(partial)) {

@@ -151,14 +151,14 @@ export async function refreshSubscription(
         [playlistId, position, songIds[position]],
       )
     }
-    if (onlineName.length > 0) {
-      await client.query(
-        `UPDATE playlists
-         SET name = $2
-         WHERE id = $1::bigint AND name = ''`,
-        [playlistId, onlineName],
-      )
-    }
+    // Subsonic 的 changed 读 updated_at。成员换过就必须往前拨，失败刮削走不到这里。
+    await client.query(
+      `UPDATE playlists
+       SET updated_at = now(),
+           name = CASE WHEN name = '' AND $2 <> '' THEN $2 ELSE name END
+       WHERE id = $1::bigint`,
+      [playlistId, onlineName],
+    )
   })
 
   return { playlistId, count: ingested.length }

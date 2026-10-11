@@ -373,7 +373,7 @@ export function createOpenSong(deps: OpenDeps): {
     status: ScriptStatus,
     wanted: Quality,
     rangeHeader: string | undefined,
-  ): Promise<Response | 'next' | 'give-up'> {
+  ): Promise<Response | 'next'> {
     if (!isPlatform(row.platform)) return 'next'
     const music = musicInfoFrom(row.platform, row.platform_song_id, row.raw)
     const quality = chooseQuality(music, scriptQualities(status, row.platform), wanted)
@@ -391,7 +391,8 @@ export function createOpenSong(deps: OpenDeps): {
     const second = await fetchPlayable(secondUrl, rangeHeader)
     if (second) return second
     dropUrl(songId, quality)
-    return 'give-up'
+    // 这一条身份两条地址都废了，换下一档平台，不要整首放弃。
+    return 'next'
   }
 
   async function open(songId: string, rangeHeader: string | undefined): Promise<Response> {
@@ -415,7 +416,6 @@ export function createOpenSong(deps: OpenDeps): {
     for (const row of ordered) {
       const played = await playSource(songId, row, status, wanted, rangeHeader)
       if (played === 'next') continue
-      if (played === 'give-up') return unavailable()
       return played
     }
     return unavailable()

@@ -70,12 +70,22 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_read_timeout 300s;   # 扫描、缓存接口耗时长
     }
 }
 ```
 
 前端由服务自身从 `web/dist` 托管，nginx 不需要额外配静态目录。
+
+## Subsonic 歌单（已实现的子集）
+
+客户端走 `/rest/*.view`。这次落地的是计划里的子集，不是完整的 1.16.1 歌单编辑：
+
+- `createPlaylist` 一律新建用户歌单。请求里的 `playlistId` 会被忽略，不会改已有歌单。
+- `updatePlaylist` 打在订阅歌单上返回错误码 50。
+- 用户歌单：`name` 用来改名；重复传 `songId` 会整表替换成员。
+- `songIdToAdd`、`songIndexToRemove` 没有实现，不要按官方参数去补。
 
 ## 开机自启
 

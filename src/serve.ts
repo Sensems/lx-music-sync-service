@@ -22,36 +22,14 @@ import { createSearchService } from './services/search.js'
 import { mountSubsonic } from './subsonic/routes.js'
 import type { MusicInfo, Quality } from './types.js'
 import { createUserApiRuntime } from './userApi/runtime.js'
+import {
+  parseScheduleTime,
+  resolveCronExpression,
+  type CronSettings,
+} from './lib/cronExpr.js'
 
-export type CronSettings = {
-  scheduleOn?: string
-  schedule?: string
-  cron?: string
-  /** HH:mm for daily schedule; default 03:00 */
-  scheduleTime?: string
-}
-
-export function parseScheduleTime(raw: string | undefined): { hour: number; minute: number } {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(raw ?? '').trim())
-  if (!m) return { hour: 3, minute: 0 }
-  const hour = Number(m[1])
-  const minute = Number(m[2])
-  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
-    return { hour: 3, minute: 0 }
-  }
-  return { hour, minute }
-}
-
-export function resolveCronExpression(settings: CronSettings): string {
-  if (settings.schedule === 'every-6h') return '0 */6 * * *'
-  if (settings.schedule === 'daily') {
-    const { hour, minute } = parseScheduleTime(settings.scheduleTime)
-    return `${minute} ${hour} * * *`
-  }
-  if (settings.schedule === 'cron' && settings.cron?.trim()) return settings.cron.trim()
-  if (settings.cron?.trim()) return settings.cron.trim()
-  return '0 */6 * * *'
-}
+export type { CronSettings }
+export { parseScheduleTime, resolveCronExpression }
 
 export type CronDeps = {
   getSettings: () => CronSettings
@@ -78,13 +56,22 @@ export function startCron(deps: CronDeps): CronHandle {
     const settings = deps.getSettings()
     if (settings.scheduleOn !== '1') return
     const expr = resolveCronExpression(settings)
-    const scheduled = deps.schedule(expr, () => {
-      void deps.syncAll().catch((err) => {
-        console.error('cron sync failed', err)
+    // 非法表达式不能抛出 startServe，否则 HTTP 也起不来。
+    if (!cron.validate(expr)) {
+      console.error(`invalid cron expression, timer left stopped: ${expr}`)
+      return
+    }
+    try {
+      const scheduled = deps.schedule(expr, () => {
+        void deps.syncAll().catch((err) => {
+          console.error('cron sync failed', err)
+        })
       })
-    })
-    if (scheduled && typeof scheduled.stop === 'function') {
-      task = scheduled
+      if (scheduled && typeof scheduled.stop === 'function') {
+        task = scheduled
+      }
+    } catch (err) {
+      console.error('cron schedule failed, timer left stopped', err)
     }
   }
 

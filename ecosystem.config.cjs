@@ -15,7 +15,7 @@ module.exports = {
       script: 'bin/lx-sync.mjs',
       args: 'serve',
       interpreter: 'node',
-      // better-sqlite3 是单写连接 + 单端口，只能 fork 单实例，不要开 cluster。
+      // 后台任务在进程内排队，服务只听一个端口，只能 fork 单实例，不要开 cluster。
       exec_mode: 'fork',
       instances: 1,
       autorestart: true,
