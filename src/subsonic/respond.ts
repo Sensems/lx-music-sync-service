@@ -56,20 +56,26 @@ function send(c: Context, payload: Record<string, unknown>, format: 'json' | 'xm
 /**
  * Subsonic 的 JSON 和 XML 是同一棵树：标量当属性，对象和数组当同名子元素。
  * 文本要转义，歌名和错误信息里会有 &、<、引号。
+ * line 和 lyrics 的 value 在 JSON 里仍是字段，XML 里必须是元素正文，否则客户端读不到歌词。
  */
 function renderNode(name: string, value: unknown): string {
   if (Array.isArray(value)) return value.map((item) => renderNode(name, item)).join('')
   if (value !== null && typeof value === 'object') {
     const attrs: string[] = []
     const children: string[] = []
+    let text: string | undefined
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
       if (child === null || child === undefined) continue
+      if ((name === 'line' || name === 'lyrics') && key === 'value' && typeof child === 'string') {
+        text = escapeXml(child)
+        continue
+      }
       if (typeof child === 'object') children.push(renderNode(key, child))
       else attrs.push(`${key}="${escapeXml(String(child))}"`)
     }
     const attrText = attrs.length > 0 ? ` ${attrs.join(' ')}` : ''
-    if (children.length === 0) return `<${name}${attrText}/>`
-    return `<${name}${attrText}>${children.join('')}</${name}>`
+    if (text === undefined && children.length === 0) return `<${name}${attrText}/>`
+    return `<${name}${attrText}>${text ?? ''}${children.join('')}</${name}>`
   }
   return `<${name}>${escapeXml(value == null ? '' : String(value))}</${name}>`
 }
