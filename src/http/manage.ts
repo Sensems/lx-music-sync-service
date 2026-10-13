@@ -6,7 +6,8 @@ import { cachePlaylist, cacheSong } from '../library/cache.js'
 import { ingestTrackFromMusic } from '../library/normalize.js'
 import { setSubsonicPassword } from '../library/password.js'
 import { scanRoot } from '../library/scan.js'
-import { createOpenSong } from '../library/openSong.js'
+import { deleteSong, tidyLibrary } from '../library/maintain.js'
+import type { OpenSong } from '../library/openSong.js'
 import { createSubscription, refreshSubscription } from '../library/subscribe.js'
 import { upsertTrack } from '../library/upsert.js'
 import { pickQuality, QUALITYS } from '../lib/names.js'
@@ -67,6 +68,9 @@ export type ManageDeps = {
   jobs: ReturnType<typeof createJobQueue>
   cronSnapshot: ManageCronSnapshot
   rescheduleCron?: () => void
+  /** 和 Subsonic 共用。各自再建一份的话，同一首歌两边播放会各问一次脚本。 */
+  openSong: OpenSong
+  playback: { order: OnlineSource[]; quality: Quality }
 }
 
 type SourceRow = {
@@ -121,6 +125,10 @@ async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<R
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && 'code' in err && (err as { code?: unknown }).code === '23505'
 }
 
 /**
@@ -438,7 +446,7 @@ function enqueueRefresh(deps: ManageDeps, playlistId: string) {
   })
 }
 
-function enqueueScan(deps: ManageDeps) {
+export function enqueueScan(deps: ManageDeps) {
   return deps.jobs.enqueue('scan', {}, async () => runScan(deps))
 }
 
@@ -482,15 +490,7 @@ export async function enqueueScheduledWork(deps: ManageDeps): Promise<void> {
 }
 
 export function mountManage(app: Hono, deps: ManageDeps): void {
-  // 和 Subsonic 各持一份地址缓存。网页拖进度不能每次都再问脚本要地址。
-  const playback = { order: [...PLATFORMS], quality: '128k' as Quality }
-  const openSong = createOpenSong({
-    pool: deps.pool,
-    getMusicUrl: deps.getMusicUrl,
-    sourceOrder: () => playback.order,
-    wantedQuality: () => playback.quality,
-    getStatus: () => deps.runtime.getStatus(),
-  })
+  const { playback, openSong } = deps
 
   app.post('/api/subscriptions', async (c) => {
     const body = await readJson(c)
@@ -632,6 +632,19 @@ export function mountManage(app: Hono, deps: ManageDeps): void {
     return openSong.open(id, c.req.header('range'))
   })
 
+  app.delete('/api/library/songs/:id', async (c) => {
+    const id = c.req.param('id')
+    if (!isLibraryId(id)) return c.json({ error: 'not found' }, 404)
+    const removed = await deleteSong(deps.pool, id, deps.cacheDir)
+    if (!removed) return c.json({ error: 'not found' }, 404)
+    return c.body(null, 204)
+  })
+
+  app.post('/api/library/tidy', async (c) => {
+    const result = await tidyLibrary(deps.pool)
+    return c.json(result)
+  })
+
   app.post('/api/library/tracks', async (c) => {
     const body = await readJson(c)
     const music = asMusicInfo(body)
@@ -643,6 +656,13 @@ export function mountManage(app: Hono, deps: ManageDeps): void {
     } catch (err) {
       return c.json({ error: errorMessage(err) }, 400)
     }
+  })
+
+  app.get('/api/library/roots', async (c) => {
+    const found = await deps.pool.query<{ id: string; path: string }>(
+      `SELECT id::text AS id, path FROM library_roots ORDER BY id`,
+    )
+    return c.json({ list: found.rows })
   })
 
   app.post('/api/library/roots', async (c) => {
@@ -658,6 +678,7 @@ export function mountManage(app: Hono, deps: ManageDeps): void {
       if (!row) return c.json({ error: 'root missing after insert' }, 500)
       return c.json(row)
     } catch (err) {
+      if (isUniqueViolation(err)) return c.json({ error: '这个目录已经在列表里' }, 400)
       return c.json({ error: errorMessage(err) }, 400)
     }
   })

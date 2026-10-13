@@ -6,7 +6,7 @@ import type { Context } from 'hono'
 import type { Pool, PoolClient } from 'pg'
 import { coverFile, lyricText } from '../library/artwork.js'
 import { durationMs } from '../library/normalize.js'
-import { createOpenSong } from '../library/openSong.js'
+import type { OpenSong } from '../library/openSong.js'
 import { getLyricForMusic } from '../services/lyrics.js'
 import { getPicForMusic } from '../services/pic.js'
 import type { MusicInfo, OnlineSource, Quality } from '../types.js'
@@ -34,10 +34,10 @@ export type SubsonicDeps = {
   pool: Pool
   getMusicUrl: (source: string, musicInfo: MusicInfo, quality: Quality) => Promise<{ type: Quality; url: string }>
   getStatus: () => { sources: { [platform: string]: { qualitys?: readonly string[] } | undefined } }
-}
-
-type OpenSong = {
-  open(songId: string, rangeHeader: string | undefined): Promise<Response>
+  /** 和网页扫描共用一条队列。Subsonic 自己再扫一份会和缓存抢同一批文件。 */
+  startScan: () => Promise<{ jobId: string }>
+  openSong: OpenSong
+  playback: PlaybackSettings
 }
 
 type PlaybackSettings = {
@@ -785,8 +785,9 @@ async function getAlbumList2(c: Context, deps: SubsonicDeps, format: Format): Pr
   const type = c.req.query('type')?.trim()
   if (!type) return missing(c, format)
   const empty = sendOk(c, { albumList2: { album: [] } }, format)
-  // 库里没有年份、风格、评分。这几类给空列表，状态仍是成功。
-  if (type === 'byYear' || type === 'byGenre' || type === 'highest') return empty
+  // 库里没有年份和风格。这两类给空列表，状态仍是成功。
+  // 评分在歌曲上，highest 按专辑里已打分曲目的平均分排。
+  if (type === 'byYear' || type === 'byGenre') return empty
   if (!folderMatches(c.req.query('musicFolderId'))) return empty
 
   // 协议单次最多 500。不封顶的话一次请求会把整库专辑都吐出去。
@@ -824,7 +825,26 @@ async function getAlbumList2(c: Context, deps: SubsonicDeps, format: Format): Pr
       WHERE s.album_id = al.id
     ) DESC, al.id ASC`
   } else if (type === 'random') {
-    orderBy = 'random(), al.id ASC'
+    const ids = await randomIds(deps.pool, 'albums', size)
+    if (ids.length === 0) return empty
+    const picked = await albumsWhere(deps.pool, 'WHERE al.id::text = ANY($1::text[])', 'al.id ASC', [ids])
+    const byId = new Map(picked.map((album) => [album.id, album]))
+    const ordered = ids.flatMap((id) => {
+      const album = byId.get(id)
+      return album ? [album] : []
+    })
+    return sendOk(c, {
+      albumList2: { album: ordered.map((album) => albumJson(album)) },
+    }, format)
+  } else if (type === 'highest') {
+    where = `WHERE EXISTS (
+      SELECT 1 FROM songs s
+      WHERE s.album_id = al.id AND s.user_rating IS NOT NULL AND s.user_rating > 0
+    )`
+    orderBy = `(
+      SELECT AVG(s.user_rating) FROM songs s
+      WHERE s.album_id = al.id AND s.user_rating IS NOT NULL AND s.user_rating > 0
+    ) DESC NULLS LAST, al.id ASC`
   } else if (type === 'starred') {
     where = 'WHERE st_album.target_id IS NOT NULL'
     orderBy = 'st_album.created_at DESC, al.id ASC'
@@ -887,21 +907,94 @@ async function getStarred2(
   }, format)
 }
 
+const ID_TABLE = { songs: 'songs', albums: 'albums' } as const
+/** 这个规模内打乱主键仍然均匀，而且只排序 id 列。 */
+const RANDOM_SORT_LIMIT = 8_000
+
+function randomBigIntInclusive(lo: bigint, hi: bigint): bigint {
+  const span = hi - lo + 1n
+  if (span <= 1n) return lo
+  if (span <= BigInt(Number.MAX_SAFE_INTEGER)) {
+    return lo + BigInt(Math.floor(Math.random() * Number(span)))
+  }
+  const offset = BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)) % span
+  return lo + offset
+}
+
+async function idAtOrAfter(
+  pool: Pool,
+  table: keyof typeof ID_TABLE,
+  start: bigint,
+): Promise<string | null> {
+  const found = await pool.query<{ id: string }>(
+    `SELECT id::text AS id FROM ${ID_TABLE[table]} WHERE id >= $1::bigint ORDER BY id LIMIT 1`,
+    [start.toString()],
+  )
+  return found.rows[0]?.id ?? null
+}
+
+/**
+ * 先抽出主键，再去取完整行。
+ * 直接对带歌手聚合的查询 ORDER BY random() 会把整库每首歌都算一遍。
+ * 曲库还小时打乱主键；变大后按主键跳着抽，抽不满再按主键补齐。
+ */
+async function randomIds(pool: Pool, table: keyof typeof ID_TABLE, size: number): Promise<string[]> {
+  if (size <= 0) return []
+  const relation = ID_TABLE[table]
+  const bounds = await pool.query<{ lo: string | null; hi: string | null; n: number }>(
+    `SELECT MIN(id)::text AS lo, MAX(id)::text AS hi, COUNT(*)::int AS n FROM ${relation}`,
+  )
+  const row = bounds.rows[0]
+  const count = row?.n ?? 0
+  if (count === 0 || row?.lo == null || row?.hi == null) return []
+  const want = Math.min(size, count)
+  if (count <= RANDOM_SORT_LIMIT) {
+    const picked = await pool.query<{ id: string }>(
+      `SELECT id::text AS id FROM ${relation} ORDER BY random() LIMIT $1`,
+      [want],
+    )
+    return picked.rows.map((item) => item.id)
+  }
+  const lo = BigInt(row.lo)
+  const hi = BigInt(row.hi)
+  const seen = new Set<string>()
+  let guard = 0
+  while (seen.size < want && guard < want * 16) {
+    guard += 1
+    let id = await idAtOrAfter(pool, table, randomBigIntInclusive(lo, hi))
+    if (!id) id = await idAtOrAfter(pool, table, lo)
+    if (id) seen.add(id)
+  }
+  if (seen.size < want) {
+    const rest = await pool.query<{ id: string }>(
+      `SELECT id::text AS id FROM ${relation}
+       WHERE NOT (id::text = ANY($1::text[]))
+       ORDER BY id
+       LIMIT $2`,
+      [[...seen], want - seen.size],
+    )
+    for (const item of rest.rows) seen.add(item.id)
+  }
+  return [...seen]
+}
+
 async function getRandomSongs(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
   if (!folderMatches(c.req.query('musicFolderId'))) {
     return sendOk(c, { randomSongs: { song: [] } }, format)
   }
   const size = bounded(c.req.query('size'), 10, 50)
-  const result = await deps.pool.query<SongRow>(
-    `SELECT ${SONG_FIELDS}
-     ${SONG_FROM}
-     ORDER BY random(), s.id ASC
-     LIMIT $1`,
-    [size],
-  )
-  await fillMissingDurations(deps.pool, result.rows)
+  const ids = await randomIds(deps.pool, 'songs', size)
+  if (ids.length === 0) {
+    return sendOk(c, { randomSongs: { song: [] } }, format)
+  }
+  const rows = await songsWhere(deps.pool, 'WHERE s.id::text = ANY($1::text[])', 's.id ASC', [ids])
+  const byId = new Map(rows.map((song) => [song.id, song]))
+  const ordered = ids.flatMap((id) => {
+    const song = byId.get(id)
+    return song ? [song] : []
+  })
   return sendOk(c, {
-    randomSongs: { song: result.rows.map((song) => songJson(song)) },
+    randomSongs: { song: ordered.map((song) => songJson(song)) },
   }, format)
 }
 
@@ -1565,23 +1658,27 @@ function emptySimilar(c: Context, format: Format, key: 'similarSongs' | 'similar
 }
 
 async function getScanStatus(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
-  const counts = await deps.pool.query<{ songs: number; folders: number }>(
+  const counts = await deps.pool.query<{ songs: number; folders: number; scanning: boolean }>(
     `SELECT
        (SELECT COUNT(*)::int FROM songs) AS songs,
-       (SELECT COUNT(*)::int FROM library_roots) AS folders`,
+       (SELECT COUNT(*)::int FROM library_roots) AS folders,
+       EXISTS (
+         SELECT 1 FROM jobs
+         WHERE kind = 'scan' AND status IN ('queued', 'running')
+       ) AS scanning`,
   )
   const row = counts.rows[0]
   return sendOk(c, {
     scanStatus: {
-      scanning: false,
+      scanning: row?.scanning === true,
       count: countOf(row?.songs ?? 0),
       folderCount: countOf(row?.folders ?? 0),
     },
   }, format)
 }
 
-function startScan(c: Context, format: Format): Response {
-  // 扫描走管理接口。这里回成功，客户端才不会把「未实现」当成扫描失败。
+async function startScan(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
+  await deps.startScan()
   return sendOk(c, {}, format)
 }
 
@@ -1695,10 +1792,11 @@ async function getTopSongs(c: Context, deps: SubsonicDeps, format: Format): Prom
          JOIN artists ar ON ar.id = sa.artist_id
          WHERE sa.song_id = s.id AND ar.name = $1
        )`
+  // 播放次数来自 scrobble。没放过的歌次数是 0，排在已播放的后面。
   const songs = await songsWhere(
     deps.pool,
     where,
-    `${SONG_ORDER} LIMIT $2`,
+    `(SELECT COUNT(*) FROM scrobbles sc WHERE sc.song_id = s.id) DESC, ${SONG_ORDER} LIMIT $2`,
     [artistId ?? artist, count],
   )
   return sendOk(c, { topSongs: { song: songs.map((song) => songJson(song)) } }, format)
@@ -1708,17 +1806,7 @@ async function getTopSongs(c: Context, deps: SubsonicDeps, format: Format): Prom
  * 播放地址缓存在这一份 openSong 上。每个请求新建的话，拖动进度条会反复问脚本要地址。
  */
 export function mountSubsonic(app: Hono, deps: SubsonicDeps): void {
-  const playback: PlaybackSettings = {
-    order: [...SOURCES],
-    quality: '128k',
-  }
-  const openSong = createOpenSong({
-    pool: deps.pool,
-    getMusicUrl: deps.getMusicUrl,
-    sourceOrder: () => playback.order,
-    wantedQuality: () => playback.quality,
-    getStatus: () => deps.getStatus(),
-  })
+  const { playback, openSong } = deps
 
   const views: Record<string, View> = {
     ping,
@@ -1748,7 +1836,7 @@ export function mountSubsonic(app: Hono, deps: SubsonicDeps): void {
     getSimilarSongs: (c, format) => emptySimilar(c, format, 'similarSongs'),
     getSimilarSongs2: (c, format) => emptySimilar(c, format, 'similarSongs2'),
     getScanStatus: (c, format) => getScanStatus(c, deps, format),
-    startScan,
+    startScan: (c, format) => startScan(c, deps, format),
     getPlayQueue: (c, format) => getPlayQueue(c, deps, format),
     savePlayQueue: (c, format) => savePlayQueue(c, deps, format),
     setRating: (c, format) => setRating(c, deps, format),

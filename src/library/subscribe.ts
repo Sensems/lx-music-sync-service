@@ -25,9 +25,7 @@ function platformOf(value: string): IngestTrack['platform'] {
 }
 
 /**
- * 与 playlists.ts 的 fetchAllTracks 同一套分页。
- * 不调用 refreshPlaylistSnapshot：那条路径会写 SQLite，
- * 而这里必须等整份刮完才开 Postgres 事务。
+ * 整份歌单分页刮完再开事务。中途失败不能改掉上一份成员。
  */
 async function scrapePlaylist(
   platform: IngestTrack['platform'],

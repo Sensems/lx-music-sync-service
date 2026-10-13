@@ -46,20 +46,17 @@ node bin/lx-sync.mjs serve   # 生产启动方式（等价 npm start）
 | `src/userApi/runtime.ts` | 音源脚本沙箱，LX 与 CeruMusic 双协议；`parseScript.ts` 解析脚本头注释 |
 | `src/sdk/*` | `musicSdk/` 是从 lx-music-desktop 抽取的第三方搜索/歌单代码，`load.ts` 做统一包装 |
 | `src/lib/*` | 音质选择、`MusicInfo` 归一化、cron 表达式 |
-| `src/cli.ts` | commander 命令；`playlist` / `sync` / `download` 抛 `not available`，`search` / `serve` 可用 |
+| `src/cli.ts` | commander 命令；`search` / `serve` 可用 |
 | `bin/lx-sync.mjs` | 生产入口：进程内 `tsx` 的 `register()` 后 import `src/cli.ts` |
 | `web/src/*` | Vue 3 前端：`api.ts` 客户端、`router.ts` 五页路由、`themes.ts` 主题 token、`views/`、`components/` |
 | `test/*.test.ts` | 仓库里已有的 Vitest 用例；不要新增或扩写 |
-
-旧的 SQLite 路径（`src/db/index.ts`、`src/db/schema.ts`、`src/db/repos.ts`）还在，
-`test/cli.test.ts` 仍会 type-import repos。不要再往这条线上加功能，也不要写 `PRAGMA` 迁移。
 
 ## 约定
 
 - **ESM + NodeNext**：所有相对 import 必须带 `.js` 后缀（即使源文件是 `.ts`），例如 `import { openPool } from './db/pg.js'`。
 - **TypeScript strict**：类型不完整就补类型，不要用 `any` 绕过；`tsconfig.json` 已 `noEmit`，类型检查靠 `npm run build` 和 `npm test` 间接覆盖。
 - **依赖注入**：service 与 CLI 都通过参数接收依赖（`AppCtx` / `ManageDeps` / `CliDeps`），新增外部调用时沿用这个模式，方便测试里替换。
-- **数据库**：曲库在 Postgres。新表/列写 `src/db/sql/` 下新的迁移文件，由 `src/db/pg.ts` 按文件名顺序执行；不要改 `src/db/schema.ts`，也不要写 SQLite `PRAGMA table_info` 迁移。
+- **数据库**：曲库在 Postgres。新表/列写 `src/db/sql/` 下新的迁移文件，由 `src/db/pg.ts` 按文件名顺序执行。
 - **注释与文案**：注释用中文、说清「为什么」；面向用户的文案保持轻音乐感、说人话（见 `docs/superpowers/specs/2026-09-14-copy-and-themes-design.md`）。
 - **歌曲身份**：`song_sources` 用 **平台 + 平台歌曲 id** 对齐（酷狗为 `songmid_hash`）。不要另造 `songKey` 当主键。
 - **Subsonic 目录 id**：歌手 `ar-<id>`，专辑 `al-<id>`；歌曲 id 是 bigint 的十进制文本，不要加前缀。

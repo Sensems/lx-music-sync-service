@@ -289,9 +289,11 @@ async function discard(remote: RemoteResult): Promise<void> {
   }
 }
 
-export function createOpenSong(deps: OpenDeps): {
+export type OpenSong = {
   open(songId: string, rangeHeader: string | undefined): Promise<Response>
-} {
+}
+
+export function createOpenSong(deps: OpenDeps): OpenSong {
   const fetchRemote = deps.fetchRemote ?? defaultFetchRemote
   const now = deps.now ?? Date.now
   const urlCache = new Map<string, UrlCacheEntry>()
@@ -409,12 +411,16 @@ export function createOpenSong(deps: OpenDeps): {
   }
 
   async function open(songId: string, rangeHeader: string | undefined): Promise<Response> {
+    // 网页和 Subsonic 共用这一份地址缓存。音质要在第一个 await 之前记下，
+    // 否则后一个请求改 playback 时，这次播放会中途换档。
+    const order = deps.sourceOrder()
+    const wanted = deps.wantedQuality()
     if (!isSongId(songId)) return unavailable()
 
     const file = await readMediaFile(songId)
     if (file) return serveLocalFile(file.path, file.size, rangeHeader)
 
-    const ordered = orderSources(await readSources(songId), deps.sourceOrder())
+    const ordered = orderSources(await readSources(songId), order)
     if (ordered.length === 0) return unavailable()
 
     let status: ScriptStatus
@@ -425,7 +431,6 @@ export function createOpenSong(deps: OpenDeps): {
     }
     if (!status?.sources) return unavailable()
 
-    const wanted = deps.wantedQuality()
     for (const row of ordered) {
       const played = await playSource(songId, row, status, wanted, rangeHeader)
       if (played === 'next') continue

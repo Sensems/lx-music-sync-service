@@ -52,6 +52,53 @@ export const api = {
       if (!r.ok) throw new Error(body.error || '下载失败')
       return body as { jobId: string }
     }),
+  libraryRoots: () =>
+    fetch('/api/library/roots').then(
+      r => readJson(r, '加载目录失败') as Promise<{ list: { id: string; path: string }[] }>,
+    ),
+  addLibraryRoot: (path: string) =>
+    fetch('/api/library/roots', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    }).then(r => readJson(r, '添加目录失败') as Promise<{ id: string; path: string }>),
+  removeLibraryRoot: async (id: string) => {
+    const r = await fetch(`/api/library/roots/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    if (r.status === 204) return
+    let detail = '去掉目录失败'
+    try {
+      const body = await r.json()
+      if (typeof body?.error === 'string' && body.error) detail = body.error
+    } catch {
+      // 空响应也按失败处理。
+    }
+    throw new Error(detail)
+  },
+  scanLibrary: () =>
+    fetch('/api/library/scan', { method: 'POST' }).then(
+      r => readJson(r, '扫描失败') as Promise<{ jobId: string }>,
+    ),
+  removeLibrarySong: async (songId: string) => {
+    const r = await fetch(`/api/library/songs/${encodeURIComponent(songId)}`, { method: 'DELETE' })
+    if (r.status === 204) return
+    let detail = '去掉这首歌失败'
+    try {
+      const body = await r.json()
+      if (typeof body?.error === 'string' && body.error) detail = body.error
+    } catch {
+      // 空响应也按失败处理。
+    }
+    throw new Error(detail)
+  },
+  tidyLibrary: () =>
+    fetch('/api/library/tidy', { method: 'POST' }).then(
+      r => readJson(r, '整理失败') as Promise<{
+        removedSongs: number
+        clearedFiles: number
+        trimmedJobs: number
+        trimmedScrobbles: number
+      }>,
+    ),
   job: (id: string) =>
     fetch(`/api/jobs/${encodeURIComponent(id)}`, { cache: 'no-store' }).then(
       r => readJson(r, '任务查询失败') as Promise<JobSnapshot>,

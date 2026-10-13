@@ -4,20 +4,6 @@ import { Command, CommanderError } from 'commander'
 import type { MusicInfo, OnlineSource } from './types.js'
 
 export type CliDeps = {
-  repos: {
-    playlists: {
-      insert(input: { source: OnlineSource; url: string }): unknown
-      list(): unknown[]
-      get(id: number): unknown
-      remove(id: number): void
-    }
-  }
-  sync: {
-    syncPlaylist(id: number): Promise<unknown>
-    syncAll(): Promise<unknown>
-    downloadSearch(musicInfo: MusicInfo): Promise<unknown>
-    getRunningProgress(): unknown
-  }
   search: {
     searchMusic(
       source: OnlineSource | 'all',
@@ -28,19 +14,6 @@ export type CliDeps = {
   log: (line: string) => void
   error: (line: string) => void
   startServe?: (opts: { static: boolean; cron: boolean }) => Promise<void>
-}
-
-function musicInfoFromDownloadOpts(source: string, id: string): MusicInfo {
-  const platformId = String(id)
-  const songKey = platformId.includes('_') ? platformId : `${source}_${platformId}`
-  return {
-    id: songKey,
-    name: platformId,
-    singer: '',
-    source: source as MusicInfo['source'],
-    interval: null,
-    meta: {},
-  }
 }
 
 function buildProgram(deps: CliDeps): Command {
@@ -57,52 +30,6 @@ function buildProgram(deps: CliDeps): Command {
     },
   })
 
-  const playlist = program.command('playlist').description('Manage playlists')
-
-  playlist
-    .command('add')
-    .description('Add a playlist subscription')
-    .requiredOption('--source <source>', 'online source (kw, kg, tx, wy, mg)')
-    .requiredOption('--url <url>', 'playlist URL')
-    .action(async (opts) => {
-      const row = deps.repos.playlists.insert({
-        source: opts.source as OnlineSource,
-        url: String(opts.url),
-      })
-      deps.log(JSON.stringify(row))
-    })
-
-  playlist
-    .command('list')
-    .description('List playlists')
-    .action(() => {
-      deps.log(JSON.stringify({ list: deps.repos.playlists.list() }))
-    })
-
-  playlist
-    .command('remove <id>')
-    .description('Remove a playlist by id')
-    .action((id: string) => {
-      const num = Number(id)
-      if (!Number.isFinite(num) || !deps.repos.playlists.get(num)) {
-        deps.error('not found')
-        throw new CommanderError(1, 'playlist.remove', 'not found')
-      }
-      deps.repos.playlists.remove(num)
-    })
-
-  program
-    .command('sync')
-    .description('Sync playlists')
-    .option('--id <id>', 'sync one playlist', (v: string) => Number(v))
-    .action(async (opts) => {
-      const job =
-        opts.id != null && Number.isFinite(opts.id)
-          ? await deps.sync.syncPlaylist(opts.id)
-          : await deps.sync.syncAll()
-      deps.log(JSON.stringify(job))
-    })
-
   program
     .command('search')
     .description('Search music')
@@ -113,23 +40,6 @@ function buildProgram(deps: CliDeps): Command {
       const q = String(opts.q)
       const result = await deps.search.searchMusic(source, q, 1)
       deps.log(JSON.stringify(result))
-    })
-
-  program
-    .command('download')
-    .description('Download a track from search')
-    .requiredOption('--source <source>', 'online source')
-    .requiredOption('--id <id>', 'platform song id')
-    .action(async (opts) => {
-      const musicInfo = musicInfoFromDownloadOpts(String(opts.source), String(opts.id))
-      try {
-        const row = await deps.sync.downloadSearch(musicInfo)
-        deps.log(JSON.stringify(row))
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        deps.error(message)
-        throw new CommanderError(1, 'download', message)
-      }
     })
 
   program
@@ -172,24 +82,7 @@ export async function createDefaultCliDeps(): Promise<CliDeps> {
     searchCtx ??= await createAppContext()
     return searchCtx
   }
-  const unavailable = () => {
-    throw new Error('not available')
-  }
   return {
-    repos: {
-      playlists: {
-        insert: unavailable,
-        list: unavailable,
-        get: unavailable,
-        remove: unavailable,
-      },
-    },
-    sync: {
-      syncPlaylist: unavailable,
-      syncAll: unavailable,
-      downloadSearch: unavailable,
-      getRunningProgress: () => null,
-    },
     search: {
       async searchMusic(source, q, page) {
         const ctx = await ensureSearch()

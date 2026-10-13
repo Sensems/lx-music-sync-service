@@ -29,6 +29,11 @@ const sourceMeta = ref({
 const importUrl = ref('')
 const importing = ref(false)
 const saving = ref(false)
+const roots = ref<{ id: string; path: string }[]>([])
+const rootPath = ref('')
+const addingRoot = ref(false)
+const scanning = ref(false)
+const tidying = ref(false)
 
 const { themeId, setTheme } = useTheme()
 
@@ -85,10 +90,73 @@ function applySettings(body: Record<string, unknown>) {
 
 async function load() {
   try {
-    const body = await api.settings()
+    const [body, rootBody] = await Promise.all([api.settings(), api.libraryRoots()])
     applySettings(body)
+    roots.value = rootBody.list ?? []
   } catch {
     message.error('加载设置失败')
+  }
+}
+
+async function addRoot() {
+  const path = rootPath.value.trim()
+  if (!path) {
+    message.error('请填写目录路径')
+    return
+  }
+  addingRoot.value = true
+  try {
+    await api.addLibraryRoot(path)
+    rootPath.value = ''
+    const rootBody = await api.libraryRoots()
+    roots.value = rootBody.list ?? []
+    message.success('目录已添加')
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : '添加目录失败')
+  } finally {
+    addingRoot.value = false
+  }
+}
+
+async function removeRoot(id: string) {
+  try {
+    await api.removeLibraryRoot(id)
+    roots.value = roots.value.filter(root => root.id !== id)
+    message.success('已去掉这个目录')
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : '去掉目录失败')
+  }
+}
+
+async function tidy() {
+  const ok = window.confirm('去掉没法再听的歌，并裁剪旧的任务和播放记录？')
+  if (!ok) return
+  tidying.value = true
+  try {
+    const result = await api.tidyLibrary()
+    const parts = [
+      `去掉 ${result.removedSongs} 首`,
+      `清掉 ${result.clearedFiles} 条失效文件`,
+      `裁掉 ${result.trimmedJobs} 条任务`,
+      `裁掉 ${result.trimmedScrobbles} 条播放记录`,
+    ]
+    message.success(parts.join('，'))
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : '整理失败')
+  } finally {
+    tidying.value = false
+  }
+}
+
+async function scanNow() {
+  scanning.value = true
+  try {
+    await api.scanLibrary()
+    message.success('扫描已排进任务')
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : '扫描失败')
+  } finally {
+    scanning.value = false
   }
 }
 
@@ -167,7 +235,7 @@ onMounted(() => {
   <section class="page-panel page-measure">
     <p class="page-kicker">CABINET</p>
     <h2 class="font-display text-3xl md:text-4xl m-0">设置</h2>
-    <p class="text-mute mt-2">管理音源、音质和定时。服务监听地址仍在配置文件里修改。</p>
+    <p class="text-mute mt-2">管理音源、本地目录、音质和定时。服务监听地址仍在配置文件里修改。</p>
 
     <div class="mt-6 md:mt-8 p-4 sm:p-5 md:p-7 flex flex-col gap-6 cabinet-card">
       <div>
@@ -215,6 +283,31 @@ onMounted(() => {
             <a-button type="primary" class="stamp !h-11 !text-ink" :loading="importing" @click="importFromUrl">在线导入</a-button>
           </div>
         </label>
+      </div>
+
+      <div>
+        <h3 class="font-display text-2xl m-0">本地目录</h3>
+        <p class="text-sm text-mute mt-1 mb-3">扫描这些目录里的音频。去掉目录不会删掉已经入库的歌。</p>
+        <ul v-if="roots.length" class="flex flex-col gap-2 mb-3 list-none p-0 m-0">
+          <li v-for="root in roots" :key="root.id" class="flex items-center justify-between gap-3">
+            <span class="font-mono text-sm break-all">{{ root.path }}</span>
+            <a-button class="stamp !text-ink shrink-0" @click="removeRoot(root.id)">去掉</a-button>
+          </li>
+        </ul>
+        <p v-else class="text-sm text-mute mb-3">还没有目录。</p>
+        <div class="flex flex-col sm:flex-row gap-2">
+          <Input v-model:value="rootPath" placeholder="例如 D:\Music" class="flex-1 font-mono" @press-enter="addRoot" />
+          <a-button type="primary" class="stamp !h-11 !text-ink" :loading="addingRoot" @click="addRoot">添加目录</a-button>
+          <a-button class="stamp !h-11 !text-ink" :loading="scanning" :disabled="roots.length === 0" @click="scanNow">扫描目录</a-button>
+        </div>
+      </div>
+
+      <div>
+        <h3 class="font-display text-2xl m-0">整理</h3>
+        <p class="text-sm text-mute mt-1 mb-3">
+          缺失又没有音源的歌会从曲库去掉。还有音源的只清掉失效文件记录。任务留下最近 100 条，播放记录留下最近 2 万条。
+        </p>
+        <a-button class="stamp !h-11 !text-ink" :loading="tidying" @click="tidy">整理曲库</a-button>
       </div>
 
       <label class="block">

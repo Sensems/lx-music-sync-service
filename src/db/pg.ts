@@ -23,7 +23,10 @@ async function isApplied(pool: pg.Pool, file: string): Promise<boolean> {
   return (hit.rowCount ?? 0) > 0
 }
 
-/** 按文件名顺序执行尚未记录的 src/db/sql/*.sql。先跑 SQL，成功后再写入文件名。 */
+/**
+ * 按文件名顺序执行尚未记录的 src/db/sql/*.sql。
+ * SQL 和迁移记录在同一个事务里：中途失败会整段撤回，下次启动还能再跑。
+ */
 export async function migrate(pool: pg.Pool): Promise<void> {
   const files = readdirSync(sqlDir)
     .filter((name) => name.endsWith('.sql'))
@@ -32,7 +35,17 @@ export async function migrate(pool: pg.Pool): Promise<void> {
   for (const file of files) {
     if (await isApplied(pool, file)) continue
     const sql = readFileSync(join(sqlDir, file), 'utf8')
-    await pool.query(sql)
-    await pool.query('INSERT INTO schema_migrations (id) VALUES ($1)', [file])
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(sql)
+      await client.query('INSERT INTO schema_migrations (id) VALUES ($1)', [file])
+      await client.query('COMMIT')
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw err
+    } finally {
+      client.release()
+    }
   }
 }

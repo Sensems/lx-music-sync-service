@@ -72,6 +72,19 @@ async function onPlay(song: WallSong) {
   selectedKey.value = ''
 }
 
+async function onRemove(song: WallSong) {
+  const ok = window.confirm(`从曲库去掉「${song.name}」？缓存会删掉。原来扫进来的文件还留在磁盘上。`)
+  if (!ok) return
+  try {
+    await api.removeLibrarySong(song.songId)
+    songs.value = songs.value.filter(item => item.songId !== song.songId)
+    if (selectedKey.value === song.songId) selectedKey.value = ''
+    message.success('已从曲库去掉')
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : '去掉这首歌失败')
+  }
+}
+
 function onEnqueue(song: WallSong) {
   const { added, started } = enqueue(toItem(song))
   if (!added) message.info('已经在队列里')
@@ -187,6 +200,9 @@ onMounted(() => {
                 <button type="button" class="wall-cover-actions__btn" @click.stop="onEnqueue(song)">
                   <span class="i-lucide-list-plus" aria-hidden="true" />
                   加入队列
+                </button>
+                <button type="button" class="wall-cover-actions__btn" @click.stop="onRemove(song)">
+                  去掉
                 </button>
               </div>
             </div>

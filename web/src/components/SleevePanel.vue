@@ -18,6 +18,7 @@ const downloadedCount = computed(() => props.tracks.filter(t => t.downloaded).le
 
 const emit = defineEmits<{
   press: []
+  remove: [songId: string]
 }>()
 
 const { playList, playOne, enqueue } = usePlayer()
@@ -51,6 +52,13 @@ function onEnqueueTrack(t: Track) {
   const { added, started } = enqueue(toItem(t))
   if (!added) message.info('已经在队列里')
   else if (!started) message.success('已加入队列')
+}
+
+function onRemoveTrack(t: Track) {
+  if (!t.songId) return
+  const ok = window.confirm(`从曲库去掉「${t.name}」？缓存会删掉。下次同步时，线上还有的歌会再出现。`)
+  if (!ok) return
+  emit('remove', t.songId)
 }
 </script>
 
@@ -104,6 +112,9 @@ function onEnqueueTrack(t: Track) {
             <button type="button" class="sleeve-row-btn" @click="onEnqueueTrack(t)">
               <span class="i-lucide-list-plus" aria-hidden="true" />
               加入队列
+            </button>
+            <button v-if="t.songId" type="button" class="sleeve-row-btn" @click="onRemoveTrack(t)">
+              去掉
             </button>
           </span>
         </div>

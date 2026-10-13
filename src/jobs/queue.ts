@@ -98,6 +98,21 @@ export function createJobQueue(pool: Pool): {
   return { enqueue }
 }
 
+/**
+ * 队列只活在这个进程里。重启后库里还会留着 queued / running，
+ * 网页会一直轮询。启动时收成失败，调用方才能停下来。
+ * 不要在 search 这类只借库的命令里调用：那会把正在跑的扫描标死。
+ */
+export async function failInterruptedJobs(pool: Pool): Promise<void> {
+  await pool.query(
+    `UPDATE jobs
+     SET status = 'failed',
+         error_summary = '进程重启，这次没有做完',
+         finished_at = now()
+     WHERE status IN ('queued', 'running')`,
+  )
+}
+
 function defer<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((res) => {

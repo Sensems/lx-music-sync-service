@@ -98,6 +98,16 @@ function pressSync() {
   })()
 }
 
+async function removeTrack(songId: string) {
+  try {
+    await api.removeLibrarySong(songId)
+    tracks.value = tracks.value.filter(track => track.songId !== songId)
+    message.success('已从曲库去掉')
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : '去掉这首歌失败')
+  }
+}
+
 watch(playlistId, () => {
   void refresh()
 })
@@ -120,6 +130,7 @@ onMounted(() => {
       :tracks="tracks"
       :syncing="syncing"
       @press="pressSync"
+      @remove="removeTrack"
     />
     <div v-else class="sleeve-fallback">
       <p class="font-display text-3xl m-0">{{ loading ? '加载中…' : '找不到这张歌单' }}</p>

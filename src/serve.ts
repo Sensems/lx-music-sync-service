@@ -9,13 +9,15 @@ import { migrate, openPool } from './db/pg.js'
 import { createApp, type AppCtx } from './http/app.js'
 import {
   CRON_DEFAULTS,
+  enqueueScan,
   enqueueScheduledWork,
   loadCronSnapshot,
   mountManage,
   type ManageCronSnapshot,
   type ManageDeps,
 } from './http/manage.js'
-import { createJobQueue } from './jobs/queue.js'
+import { createJobQueue, failInterruptedJobs } from './jobs/queue.js'
+import { createOpenSong } from './library/openSong.js'
 import sdk, { createSdkGetListDetail } from './sdk/load.js'
 import type { GetListDetail } from './services/playlists.js'
 import { createSearchService } from './services/search.js'
@@ -146,7 +148,20 @@ export async function startServe(opts: ServeOptions = {}): Promise<void> {
   const ctx = await createAppContext(config)
 
   try {
+    // 只在拉起 HTTP 时收尾。search 也会打开同一份库，不能把正在跑的任务标成失败。
+    await failInterruptedJobs(ctx.pool)
     let cronHandle: CronHandle | null = null
+    const playback = {
+      order: ['kw', 'kg', 'tx', 'wy', 'mg'] as Array<'kw' | 'kg' | 'tx' | 'wy' | 'mg'>,
+      quality: '128k' as Quality,
+    }
+    const openSong = createOpenSong({
+      pool: ctx.pool,
+      getMusicUrl: ctx.getMusicUrl,
+      sourceOrder: () => playback.order,
+      wantedQuality: () => playback.quality,
+      getStatus: () => ctx.runtime.getStatus(),
+    })
     const manageDeps: ManageDeps = {
       pool: ctx.pool,
       dataDir: ctx.dataDir,
@@ -158,6 +173,8 @@ export async function startServe(opts: ServeOptions = {}): Promise<void> {
       jobs: ctx.jobs,
       cronSnapshot: ctx.cronSnapshot,
       rescheduleCron: () => cronHandle?.reschedule(),
+      openSong,
+      playback,
     }
 
     if (withCron) {
@@ -177,6 +194,9 @@ export async function startServe(opts: ServeOptions = {}): Promise<void> {
       pool: ctx.pool,
       getMusicUrl: ctx.getMusicUrl,
       getStatus: () => ctx.runtime.getStatus(),
+      startScan: () => enqueueScan(manageDeps),
+      openSong,
+      playback,
     })
 
     if (withStatic) {

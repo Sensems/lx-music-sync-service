@@ -103,7 +103,7 @@
 ```
 .
 ├── src/
-│   ├── cli.ts                # CLI：search / serve 可用；playlist / sync / download 抛 not available
+│   ├── cli.ts                # CLI：search / serve
 │   ├── serve.ts              # 组装依赖、启动 HTTP + 静态资源 + cron、优雅退出
 │   ├── config.ts             # config.yaml / 环境变量，含 databaseUrl
 │   ├── http/
@@ -239,11 +239,8 @@ curl -X POST http://127.0.0.1:8787/api/settings/user-api/url \
 | --- | --- |
 | `lx-sync search --source <source\|all> --q <text>` | 搜索曲目，输出 JSON |
 | `lx-sync serve` | 启动 HTTP 服务（管理接口、Subsonic、静态资源、定时任务） |
-| `lx-sync playlist …` | 命令还在，默认实现抛 `not available` |
-| `lx-sync sync` | 同上，抛 `not available` |
-| `lx-sync download …` | 同上，抛 `not available` |
 
-订阅、入库、扫描、缓存请走 HTTP 管理接口或 Subsonic，不要用 CLI 的 playlist / sync / download。
+订阅、入库、扫描、缓存、删歌走 HTTP 管理接口或 Subsonic。
 
 ```bash
 node bin/lx-sync.mjs search --source all --q '起风了'
@@ -265,9 +262,12 @@ node bin/lx-sync.mjs serve
 | `DELETE` | `/api/subscriptions/:id` | 删除订阅，返回 `204`（不删歌曲和缓存） |
 | `GET` | `/api/search` | 搜索：`?q=&source=kw\|kg\|tx\|wy\|mg\|all&page=`（默认 `all`、`1`） |
 | `POST` | `/api/library/tracks` | 搜索点歌入库：一篇 `MusicInfo` |
+| `DELETE` | `/api/library/songs/:id` | 从曲库去掉一首歌，返回 `204`。只删缓存文件，扫描进来的原文件留在磁盘上 |
+| `GET` | `/api/library/roots` | 扫描根列表 |
 | `POST` | `/api/library/roots` | 添加扫描根：`{ path }` |
 | `DELETE` | `/api/library/roots/:id` | 去掉扫描根，不删已入库的歌 |
 | `POST` | `/api/library/scan` | 排队扫描全部根目录 |
+| `POST` | `/api/library/tidy` | 去掉缺失且没有音源的歌，清掉其余失效文件记录，并裁剪旧任务和播放记录 |
 | `POST` | `/api/cache/songs/:id` | 排队缓存一首歌 |
 | `POST` | `/api/cache/playlists/:id` | 排队缓存一份歌单 |
 | `POST` | `/api/cache/songs/:id/recache` | 按当前音质重新缓存并替换文件 |

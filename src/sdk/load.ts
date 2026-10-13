@@ -52,7 +52,7 @@ export const sdk: Record<string, SdkSourceModule> = Object.fromEntries(
   sources.map(s => [s, wrapSource((rawSdk as any)[s])]),
 )
 
-/** Bound getListDetail for createPlaylistService. */
+/** 订阅刷新用来分页拉在线歌单。 */
 export function createSdkGetListDetail() {
   return (source: OnlineSource, id: string, page: number) =>
     sdk[source]!.songList.getListDetail(id, page)
