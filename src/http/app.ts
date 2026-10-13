@@ -78,6 +78,12 @@ export function createApp(ctx: AppCtx): Hono {
   const app = new Hono()
   const { runtime, dataDir } = ctx
 
+  // 接口响应不能进浏览器缓存。曾经有人把首页 HTML 当成 /api/jobs 的 200 缓存下来。
+  app.use('/api/*', async (c, next) => {
+    await next()
+    c.header('Cache-Control', 'no-store')
+  })
+
   app.get('/api/source/status', (c) => {
     return c.json(runtime.getStatus())
   })

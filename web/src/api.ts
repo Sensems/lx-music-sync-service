@@ -26,7 +26,7 @@ export const api = {
   syncPlaylist: (id: number) =>
     fetch(`/api/playlists/${id}/sync`, { method: 'POST' }).then(r => r.json()),
   syncAll: () => fetch('/api/sync', { method: 'POST' }).then(r => r.json()),
-  jobs: () => fetch('/api/jobs').then(r => r.json()),
+  jobs: () => fetch('/api/jobs', { cache: 'no-store' }).then(r => r.json()),
   search: (source: string, q: string) =>
     fetch(`/api/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`).then(r =>
       r.json(),

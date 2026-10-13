@@ -559,6 +559,17 @@ export function mountManage(app: Hono, deps: ManageDeps): void {
     return c.json(job)
   })
 
+  app.get('/api/jobs', async (c) => {
+    const found = await deps.pool.query(
+      `SELECT id::text AS id, kind, status, payload, result, error_summary,
+              started_at, finished_at, created_at
+       FROM jobs
+       ORDER BY id DESC
+       LIMIT 100`,
+    )
+    return c.json({ list: found.rows })
+  })
+
   app.get('/api/jobs/:id', async (c) => {
     const id = c.req.param('id')
     if (!isLibraryId(id)) return c.json({ error: 'not found' }, 404)
@@ -624,4 +635,7 @@ export function mountManage(app: Hono, deps: ManageDeps): void {
     }
     return c.json(await settingsPayload(deps))
   })
+
+  // 没挂上的 /api 不能落到静态首页。否则前端把 index.html 的 <!doctype 当成 JSON。
+  app.all('/api/*', (c) => c.json({ error: 'not found' }, 404))
 }

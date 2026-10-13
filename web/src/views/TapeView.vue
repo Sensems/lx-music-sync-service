@@ -4,29 +4,15 @@ import { api } from '../api'
 import type { JobLine } from '../mock/data'
 
 type JobRow = {
-  id: number
+  id: string
   kind: string
-  playlist_id: number | null
   status: string
-  scanned: number
-  skipped: number
-  downloaded: number
-  failed: number
+  payload: Record<string, unknown>
+  result: Record<string, unknown>
   error_summary: string | null
-  started_at: number
 }
 
-type Running = {
-  trackDone: number
-  trackTotal: number
-  percent: number
-  songKey: string | null
-  downloaded: number
-  byteTotal: number | null
-} | null
-
 const jobs = ref<JobRow[]>([])
-const running = ref<Running>(null)
 let timer: ReturnType<typeof setInterval> | undefined
 
 const tone: Record<string, string> = {
@@ -43,41 +29,46 @@ const mark: Record<string, string> = {
   fail: '失败',
 }
 
+const kindTitle: Record<string, string> = {
+  'refresh-subscription': '刷新订阅',
+  scan: '扫描目录',
+  'cache-song': '缓存歌曲',
+  'cache-playlist': '缓存歌单',
+  recache: '重新缓存',
+}
+
 function kindOf(job: JobRow): JobLine['kind'] {
-  if (job.status === 'running') return 'run'
-  if (job.status === 'skipped') return 'skip'
+  if (job.status === 'running' || job.status === 'queued') return 'run'
   if (job.status === 'failed') return 'fail'
   return 'done'
 }
 
 function titleOf(job: JobRow): string {
-  if (job.status === 'running') {
-    if (job.kind === 'all') return '同步中 · 全部启用歌单'
-    if (job.kind === 'search') return '下载中 · 搜索'
-    return `同步中 · 歌单 #${job.playlist_id ?? '?'}`
-  }
-  if (job.status === 'skipped') return '已跳过'
-  if (job.status === 'failed') return '失败'
-  return '已完成'
+  const name = kindTitle[job.kind] ?? job.kind
+  const playlistId = job.payload?.playlistId
+  const songId = job.payload?.songId
+  if (playlistId != null && playlistId !== '') return `${name} · #${playlistId}`
+  if (songId != null && songId !== '') return `${name} · #${songId}`
+  return name
 }
 
 function detailOf(job: JobRow): string {
-  if (job.status === 'running' && running.value) {
-    const parts = [`${running.value.percent}%`, `${running.value.trackDone}/${running.value.trackTotal}`]
-    if (running.value.songKey) {
-      const total = running.value.byteTotal != null ? `${(running.value.byteTotal / 1e6).toFixed(1)} MB` : '?'
-      parts.push(`${running.value.songKey} ${(running.value.downloaded / 1e6).toFixed(1)} / ${total}`)
-    }
-    return parts.join(' · ')
+  if (job.status === 'failed') return job.error_summary || '失败'
+  if (job.status === 'queued') return '排队中'
+  if (job.status === 'running') return '进行中'
+  const result = job.result ?? {}
+  if (typeof result.count === 'number') return `写入 ${result.count} 首`
+  if (Array.isArray(result.unmerged) || Array.isArray(result.unreadable)) {
+    const unmerged = Array.isArray(result.unmerged) ? result.unmerged.length : 0
+    const unreadable = Array.isArray(result.unreadable) ? result.unreadable.length : 0
+    return `未合并 ${unmerged} · 读不出 ${unreadable}`
   }
-  const parts = [
-    `扫描 ${job.scanned}`,
-    `跳过 ${job.skipped}`,
-    `新下载 ${job.downloaded}`,
-    `失败 ${job.failed}`,
-  ]
-  if (job.error_summary) parts.push(job.error_summary)
-  return parts.join(' · ')
+  if (typeof result.cached === 'number') {
+    return `缓存 ${result.cached} · 跳过 ${Number(result.skipped ?? 0)} · 失败 ${Number(result.failed ?? 0)}`
+  }
+  if (result.skipped === 'has-file') return '已有文件，跳过'
+  if (typeof result.path === 'string') return '已写入缓存'
+  return '完成'
 }
 
 const lines = computed(() => {
@@ -87,25 +78,6 @@ const lines = computed(() => {
     detail: detailOf(j),
     kind: kindOf(j),
   }))
-  if (running.value && !jobs.value.some(j => j.status === 'running')) {
-    mapped.unshift({
-      id: 'running',
-      title: '同步中',
-      detail: detailOf({
-        id: 0,
-        kind: 'all',
-        playlist_id: null,
-        status: 'running',
-        scanned: 0,
-        skipped: 0,
-        downloaded: 0,
-        failed: 0,
-        error_summary: null,
-        started_at: Date.now(),
-      }),
-      kind: 'run',
-    })
-  }
   return mapped
 })
 
@@ -113,7 +85,6 @@ async function refresh() {
   try {
     const body = await api.jobs()
     jobs.value = body.list ?? []
-    running.value = body.running ?? null
   } catch {
     /* keep last */
   }
@@ -132,7 +103,7 @@ onUnmounted(() => {
 <template>
   <section class="max-w-3xl">
     <h2 class="font-display text-4xl m-0">任务</h2>
-    <p class="text-mute mt-2">查看同步与下载记录：扫过多少、跳过多少、新下了多少。</p>
+    <p class="text-mute mt-2">刷新订阅、扫描目录、缓存歌曲，都排在这里。</p>
 
     <div v-if="lines.length" class="mt-8 relative pl-6 border-0 border-l-2 border-solid border-border stagger-in">
       <article
@@ -148,8 +119,7 @@ onUnmounted(() => {
     </div>
     <div v-else class="mt-10 text-mute">
       <p class="font-display text-2xl text-fg m-0">暂无任务记录</p>
-      <p>去歌单同步一张，或在设置里打开定时同步。</p>
-      <RouterLink to="/shelf" class="inline-block mt-3 text-foil no-underline hover:underline">去歌单</RouterLink>
+      <p>订阅刷新、扫描或缓存开始后，会出现在这里。</p>
     </div>
   </section>
 </template>

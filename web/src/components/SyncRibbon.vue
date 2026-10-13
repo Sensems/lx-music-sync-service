@@ -2,15 +2,6 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { api } from '../api'
 
-type Running = {
-  trackDone: number
-  trackTotal: number
-  percent: number
-  songKey: string | null
-  downloaded: number
-  byteTotal: number | null
-}
-
 const live = ref<{
   title: string
   detail: string
@@ -19,44 +10,33 @@ const live = ref<{
 } | null>(null)
 let timer: ReturnType<typeof setInterval> | undefined
 
-function formatBytes(n: number): string {
-  return `${(n / 1e6).toFixed(1)} MB`
+const kindTitle: Record<string, string> = {
+  'refresh-subscription': '刷新订阅',
+  scan: '扫描目录',
+  'cache-song': '缓存歌曲',
+  'cache-playlist': '缓存歌单',
+  recache: '重新缓存',
 }
 
-function titleForJob(job?: { kind?: string; playlist_id?: number | null } | null): string {
-  if (!job) return '同步中'
-  if (job.kind === 'all') return '同步中 · 全部歌单'
-  if (job.kind === 'search') return '下载中 · 搜索'
-  if (job.playlist_id != null) return `同步中 · 歌单 #${job.playlist_id}`
-  return '同步中'
+function titleForJob(job?: { kind?: string; payload?: { playlistId?: unknown; songId?: unknown } } | null): string {
+  if (!job?.kind) return '进行中'
+  const name = kindTitle[job.kind] ?? job.kind
+  const playlistId = job.payload?.playlistId
+  const songId = job.payload?.songId
+  if (playlistId != null && playlistId !== '') return `${name} · #${playlistId}`
+  if (songId != null && songId !== '') return `${name} · #${songId}`
+  return name
 }
 
 async function refresh() {
   try {
     const body = await api.jobs()
-    const running = body.running as Running | null
-    const runJob = (body.list ?? []).find((j: { status: string }) => j.status === 'running')
-
-    if (running && running.trackTotal > 0) {
-      const pct = running.percent ?? 0
-      const parts = [`${running.trackDone}/${running.trackTotal}`]
-      if (running.songKey) {
-        const total = running.byteTotal != null ? formatBytes(running.byteTotal) : '?'
-        parts.push(`${running.songKey} ${formatBytes(running.downloaded)} / ${total}`)
-      }
-      live.value = {
-        title: titleForJob(runJob),
-        detail: parts.join(' · '),
-        percent: pct,
-        showBar: true,
-      }
-      return
-    }
+    const runJob = (body.list ?? []).find((j: { status: string }) => j.status === 'running' || j.status === 'queued')
 
     if (runJob) {
       live.value = {
         title: titleForJob(runJob),
-        detail: `已扫 ${runJob.scanned} · 新下 ${runJob.downloaded}`,
+        detail: runJob.status === 'queued' ? '排队中' : '进行中',
         percent: 0,
         showBar: false,
       }
@@ -94,7 +74,7 @@ onUnmounted(() => {
         <span class="text-mute"> · {{ live.detail }}</span>
         <span v-if="live.showBar" class="ml-2 font-mono text-foil">{{ live.percent }}%</span>
       </p>
-      <p v-else class="m-0 text-sm text-mute flex-1">当前没有进行中的任务。可以去歌单同步，或在设置里打开定时。</p>
+      <p v-else class="m-0 text-sm text-mute flex-1">当前没有进行中的任务。</p>
       <RouterLink to="/tape" class="text-foil text-sm no-underline hover:underline cursor-pointer">
         查看任务
       </RouterLink>
