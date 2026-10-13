@@ -19,6 +19,11 @@ import { sendErr, sendOk } from './respond.js'
  */
 const MUSIC_FOLDER_ID = '1'
 const MUSIC_FOLDER_NAME = '听柜'
+/**
+ * getArtists / getIndexes 的必填属性。Navic 缺这个键会直接解析失败，登录进不去。
+ * 空字符串表示排序时不忽略冠词，和下面按首字符分桶的做法一致。
+ */
+const IGNORED_ARTICLES = ''
 const ARTIST_PREFIX = 'ar-'
 const ALBUM_PREFIX = 'al-'
 const BIGINT_MAX = 9223372036854775807n
@@ -616,19 +621,26 @@ function getMusicFolders(c: Context, format: Format): Response {
 
 async function getIndexes(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
   if (!folderMatches(c.req.query('musicFolderId'))) {
-    return sendOk(c, { indexes: { index: [] } }, format)
+    return sendOk(c, { indexes: indexBody([]) }, format)
   }
   const groups = groupArtists(await listArtists(deps.pool))
   return sendOk(c, {
-    indexes: {
-      index: groups.map((group) => ({
-        name: group.name,
-        artist: group.artists.map((artist) => (
-          artistJson(artist.id, artist.name, undefined, starredIso(artist.starred_at))
-        )),
-      })),
-    },
+    indexes: indexBody(groups.map((group) => ({
+      name: group.name,
+      artist: group.artists.map((artist) => (
+        artistJson(artist.id, artist.name, undefined, starredIso(artist.starred_at))
+      )),
+    }))),
   }, format)
+}
+
+/** lastModified 是 Indexes 的必填属性。没有单独修订号，用当前时间，避免客户端把旧列表缓存死。 */
+function indexBody(index: unknown[]): Record<string, unknown> {
+  return {
+    ignoredArticles: IGNORED_ARTICLES,
+    lastModified: Date.now(),
+    index,
+  }
 }
 
 async function getMusicDirectory(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
@@ -708,19 +720,24 @@ async function getMusicDirectory(c: Context, deps: SubsonicDeps, format: Format)
 
 async function getArtists(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
   if (!folderMatches(c.req.query('musicFolderId'))) {
-    return sendOk(c, { artists: { index: [] } }, format)
+    return sendOk(c, { artists: artistIndexBody([]) }, format)
   }
   const groups = groupArtists(await listArtists(deps.pool))
   return sendOk(c, {
-    artists: {
-      index: groups.map((group) => ({
-        name: group.name,
-        artist: group.artists.map((artist) => (
-          artistJson(artist.id, artist.name, countOf(artist.album_count), starredIso(artist.starred_at))
-        )),
-      })),
-    },
+    artists: artistIndexBody(groups.map((group) => ({
+      name: group.name,
+      artist: group.artists.map((artist) => (
+        artistJson(artist.id, artist.name, countOf(artist.album_count), starredIso(artist.starred_at))
+      )),
+    }))),
   }, format)
+}
+
+function artistIndexBody(index: unknown[]): Record<string, unknown> {
+  return {
+    ignoredArticles: IGNORED_ARTICLES,
+    index,
+  }
 }
 
 async function getArtist(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
