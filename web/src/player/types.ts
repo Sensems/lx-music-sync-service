@@ -1,5 +1,6 @@
 export type PlayItem = {
   songKey: string
+  songId?: string
   name: string
   singer: string
   picUrl: string

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { Input, Spin, message } from 'ant-design-vue'
 import { api } from '../api'
+import { mapTrack } from '../playlists'
 import SourceIcon from '../components/SourceIcon.vue'
 import type { SourceId } from '../mock/data'
 import { sourceLabels } from '../mock/data'
@@ -9,15 +10,14 @@ import { usePlayer } from '../player/usePlayer'
 import type { PlayItem } from '../player/types'
 
 type WallSong = {
-  song_key: string
+  songId: string
+  songKey: string
   name: string
   singer: string
   source: string
-  pic_url: string
+  picUrl: string
   quality: string
-  file_path: string
-  source_kind: string
-  completed_at: number
+  musicInfo: PlayItem['musicInfo']
 }
 
 const { playOne, enqueue } = usePlayer()
@@ -39,26 +39,27 @@ const filtered = computed(() => {
 
 function toItem(song: WallSong): PlayItem {
   return {
-    songKey: song.song_key,
+    songKey: song.songKey,
+    songId: song.songId,
     name: song.name,
     singer: song.singer,
-    picUrl: song.pic_url,
+    picUrl: song.picUrl,
     source: song.source,
-    musicInfo: null,
+    musicInfo: song.musicInfo,
   }
 }
 
-function markBroken(key: string) {
-  coverBroken.value = { ...coverBroken.value, [key]: true }
+function markBroken(songId: string) {
+  coverBroken.value = { ...coverBroken.value, [songId]: true }
 }
 
 function coverOf(song: WallSong): string {
-  if (coverBroken.value[song.song_key] || !song.pic_url) return ''
-  return song.pic_url
+  if (coverBroken.value[song.songId] || !song.picUrl) return ''
+  return song.picUrl
 }
 
 function toggleSelect(song: WallSong) {
-  selectedKey.value = selectedKey.value === song.song_key ? '' : song.song_key
+  selectedKey.value = selectedKey.value === song.songId ? '' : song.songId
 }
 
 function clearSelectionIfOutside(e: MouseEvent) {
@@ -80,42 +81,20 @@ function onEnqueue(song: WallSong) {
 async function load() {
   loading.value = true
   try {
-    const body = await api.downloads()
-    songs.value = (body.list ?? []).map((r: Record<string, unknown>) => ({
-      song_key: String(r.song_key),
-      name: String(r.name || r.song_key),
-      singer: String(r.singer || '未知歌手'),
-      source: String(r.source || ''),
-      pic_url: String(r.pic_url || ''),
-      quality: String(r.quality || ''),
-      file_path: String(r.file_path || ''),
-      source_kind: String(r.source_kind || ''),
-      completed_at: Number(r.completed_at || 0),
-    }))
-    const missing = songs.value.some(s => !s.pic_url)
-    if (missing) {
-      void api
-        .backfillCovers()
-        .then(async res => {
-          if (res.updated > 0) {
-            const again = await api.downloads()
-            songs.value = (again.list ?? []).map((r: Record<string, unknown>) => ({
-              song_key: String(r.song_key),
-              name: String(r.name || r.song_key),
-              singer: String(r.singer || '未知歌手'),
-              source: String(r.source || ''),
-              pic_url: String(r.pic_url || ''),
-              quality: String(r.quality || ''),
-              file_path: String(r.file_path || ''),
-              source_kind: String(r.source_kind || ''),
-              completed_at: Number(r.completed_at || 0),
-            }))
-          }
-        })
-        .catch(() => {
-          /* ignore */
-        })
-    }
+    const body = await api.cachedSongs()
+    songs.value = (body.list ?? []).map((row: Record<string, unknown>) => {
+      const track = mapTrack(row)
+      return {
+        songId: track.songId || track.songKey,
+        songKey: track.songKey,
+        name: track.name || '未知歌曲',
+        singer: track.singer || '未知歌手',
+        source: track.source,
+        picUrl: track.picUrl || '',
+        quality: track.quality,
+        musicInfo: track.musicInfo ?? null,
+      }
+    })
   } catch {
     message.error('加载唱片墙失败')
   } finally {
@@ -129,11 +108,11 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="wall-page" @click="clearSelectionIfOutside">
+  <section class="wall-page page-measure" @click="clearSelectionIfOutside">
     <header class="wall-hero">
       <div>
-        <p class="wall-kicker">LIBRARY</p>
-        <h2 class="font-display text-4xl md:text-5xl m-0">唱片墙</h2>
+        <p class="page-kicker">LIBRARY</p>
+        <h2 class="font-display text-3xl md:text-5xl m-0">唱片墙</h2>
         <p class="text-mute mt-2 max-w-xl m-0">
           已下载到本地的歌曲会显示在这里。点封面会出现播放。
         </p>
@@ -151,19 +130,24 @@ onMounted(() => {
     </header>
 
     <div class="wall-toolbar">
-      <Input
-        v-model:value="q"
-        allow-clear
-        placeholder="搜歌名 / 歌手 / 平台"
-        class="wall-search"
-      />
+      <label class="wall-search">
+        <span class="sr-only">搜歌名、歌手或平台</span>
+        <Input
+          v-model:value="q"
+          allow-clear
+          placeholder="搜歌名 / 歌手 / 平台"
+          autocomplete="off"
+          name="wall-q"
+          inputmode="search"
+        />
+      </label>
     </div>
 
     <Spin :spinning="loading">
       <div v-if="filtered.length" class="wall-grid stagger-in">
         <div
           v-for="(song, idx) in filtered"
-          :key="song.song_key"
+          :key="song.songId"
           class="wall-card"
           :style="{ '--i': String(idx % 12) }"
           @click.stop
@@ -172,7 +156,7 @@ onMounted(() => {
             <div class="wall-vinyl" aria-hidden="true" />
             <div
               class="wall-cover"
-              :class="{ 'wall-cover--selected': selectedKey === song.song_key }"
+              :class="{ 'wall-cover--selected': selectedKey === song.songId }"
               role="button"
               tabindex="0"
               @click="toggleSelect(song)"
@@ -185,14 +169,14 @@ onMounted(() => {
                 :src="coverOf(song)"
                 :alt="song.name"
                 loading="lazy"
-                @error="markBroken(song.song_key)"
+                @error="markBroken(song.songId)"
               />
               <div v-else class="wall-cover__empty">
                 <span>{{ (song.name || '?').slice(0, 1) }}</span>
               </div>
               <SourceIcon class="wall-card__badge" :source="song.source" :size="20" />
               <div
-                v-if="selectedKey === song.song_key"
+                v-if="selectedKey === song.songId"
                 class="wall-cover-actions"
                 @click.stop
               >
@@ -226,25 +210,13 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.wall-page {
-  max-width: 1120px;
-}
-
 .wall-hero {
   display: flex;
   flex-wrap: wrap;
-  gap: 1.5rem;
+  gap: 1rem 1.5rem;
   justify-content: space-between;
   align-items: end;
-  margin-bottom: 1.5rem;
-}
-
-.wall-kicker {
-  margin: 0 0 0.35rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.7rem;
-  letter-spacing: 0.28em;
-  color: var(--mute);
+  margin-bottom: 1.25rem;
 }
 
 .wall-stats {
@@ -276,6 +248,8 @@ onMounted(() => {
 }
 
 .wall-search {
+  display: block;
+  width: 100%;
   max-width: 22rem;
 }
 
@@ -391,6 +365,10 @@ onMounted(() => {
   color: var(--ink);
 }
 
+html[data-theme-mode='light'] .wall-cover-actions__btn--play {
+  color: var(--card);
+}
+
 .wall-cover-actions__btn:hover {
   border-color: var(--foil);
   color: var(--foil);
@@ -400,6 +378,10 @@ onMounted(() => {
   background: var(--tungsten);
   border-color: var(--tungsten);
   color: var(--ink);
+}
+
+html[data-theme-mode='light'] .wall-cover-actions__btn--play:hover {
+  color: var(--card);
 }
 
 .wall-card:hover .wall-cover,
@@ -468,10 +450,35 @@ onMounted(() => {
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 767px) {
+  .wall-stats {
+    width: 100%;
+  }
+
+  .wall-stat {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .wall-search {
+    max-width: none;
+  }
+
   .wall-grid {
-    grid-template-columns: repeat(auto-fill, minmax(138px, 1fr));
-    gap: 1rem 0.75rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem 0.7rem;
+  }
+
+  .wall-cover-actions {
+    gap: 0.35rem;
+    padding: 0.4rem;
+  }
+
+  .wall-cover-actions__btn {
+    min-width: 0;
+    width: 100%;
+    font-size: 0.72rem;
+    padding: 0.35rem 0.4rem;
   }
 }
 

@@ -46,8 +46,8 @@ onUnmounted(() => {
 <style scoped>
 .back-top {
   position: fixed;
-  right: 1.25rem;
-  bottom: 5.5rem;
+  right: max(1rem, var(--safe-r));
+  bottom: calc(var(--chrome-bottom) + 0.85rem);
   z-index: 40;
   width: 2.75rem;
   height: 2.75rem;
@@ -86,18 +86,7 @@ onUnmounted(() => {
 }
 
 .back-top--raised {
-  bottom: 9.5rem;
-}
-
-@media (max-width: 640px) {
-  .back-top {
-    right: 1rem;
-    bottom: 5.25rem;
-  }
-
-  .back-top--raised {
-    bottom: 9.5rem;
-  }
+  bottom: calc(var(--chrome-bottom) + 0.85rem);
 }
 
 @media (prefers-reduced-motion: reduce) {

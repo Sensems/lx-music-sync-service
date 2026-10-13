@@ -34,33 +34,33 @@ function asMusicInfo(body: Record<string, unknown>): MusicInfo | null {
   return null
 }
 
+function cleanPicUrl(raw: unknown): string {
+  const s = String(raw || '').trim()
+  return !s || s === 'null' || s === 'undefined' ? '' : s
+}
+
 function lyricDisplayFields(musicInfo: MusicInfo) {
   return {
     name: musicInfo.name,
     singer: musicInfo.singer,
     source: musicInfo.source,
-    picUrl: String(musicInfo.meta?.picUrl || ''),
+    picUrl: cleanPicUrl(musicInfo.meta?.picUrl),
   }
 }
 
 async function lyricPayload(songKey: string, musicInfo: MusicInfo) {
-  const display = lyricDisplayFields(musicInfo)
-  try {
-    const { getLyricForMusic } = await import('../services/lyrics.js')
-    const lyric = await getLyricForMusic(musicInfo)
-    return {
-      songKey,
-      ...display,
-      lyric: lyric.lyric || '',
-      tlyric: lyric.tlyric || '',
-    }
-  } catch {
-    return {
-      songKey,
-      ...display,
-      lyric: '',
-      tlyric: '',
-    }
+  const { getLyricForMusic } = await import('../services/lyrics.js')
+  const { ensureMusicPic } = await import('../services/pic.js')
+  // 已有封面就不要再打一次平台；歌词失败时仍把封面带回去。
+  const [enriched, lyric] = await Promise.all([
+    cleanPicUrl(musicInfo.meta?.picUrl) ? musicInfo : ensureMusicPic(musicInfo).catch(() => musicInfo),
+    getLyricForMusic(musicInfo).catch(() => ({ lyric: '', tlyric: '' })),
+  ])
+  return {
+    songKey,
+    ...lyricDisplayFields(enriched),
+    lyric: lyric.lyric || '',
+    tlyric: lyric.tlyric || '',
   }
 }
 

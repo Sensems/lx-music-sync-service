@@ -1,8 +1,11 @@
 import { readFile } from 'node:fs/promises'
+import { extname } from 'node:path'
+import { parseFile } from 'music-metadata'
 import { Hono } from 'hono'
 import type { Context } from 'hono'
 import type { Pool, PoolClient } from 'pg'
 import { coverFile, lyricText } from '../library/artwork.js'
+import { durationMs } from '../library/normalize.js'
 import { createOpenSong } from '../library/openSong.js'
 import { getLyricForMusic } from '../services/lyrics.js'
 import { getPicForMusic } from '../services/pic.js'
@@ -19,6 +22,7 @@ const MUSIC_FOLDER_NAME = '听柜'
 const ARTIST_PREFIX = 'ar-'
 const ALBUM_PREFIX = 'al-'
 const BIGINT_MAX = 9223372036854775807n
+const PG_INT_MAX = 2_147_483_647
 const DEFAULT_USER = 'tinggui'
 const SOURCES = ['kw', 'kg', 'tx', 'wy', 'mg'] as const satisfies readonly OnlineSource[]
 const QUALITIES = ['flac24bit', 'flac', 'wav', 'ape', '320k', '192k', '128k'] as const satisfies readonly Quality[]
@@ -45,6 +49,7 @@ type ArtistRow = {
   id: string
   name: string
   album_count: number | string
+  starred_at?: Date | string | null
 }
 
 type AlbumRow = {
@@ -54,6 +59,7 @@ type AlbumRow = {
   artist_id: string
   song_count: number | string
   duration_ms: number | string | null
+  starred_at?: Date | string | null
 }
 
 type SongRow = {
@@ -63,6 +69,15 @@ type SongRow = {
   album_id: string
   album: string
   artist: string
+  file_path: string | null
+  file_size: string | number | null
+  file_missing: boolean | null
+  starred_at?: Date | string | null
+  track_no: number | null
+  disc_no: number | null
+  created_at: Date | string
+  artist_id: string
+  user_rating: number | null
 }
 
 type View = (c: Context, format: Format) => Promise<Response> | Response
@@ -73,7 +88,8 @@ al.title,
 ar.name AS artist,
 ar.id::text AS artist_id,
 (SELECT COUNT(*)::int FROM songs s WHERE s.album_id = al.id) AS song_count,
-(SELECT COALESCE(SUM(s.duration_ms), 0)::bigint FROM songs s WHERE s.album_id = al.id) AS duration_ms
+(SELECT COALESCE(SUM(s.duration_ms), 0)::bigint FROM songs s WHERE s.album_id = al.id) AS duration_ms,
+st_album.created_at AS starred_at
 `
 
 const SONG_FIELDS = `
@@ -91,19 +107,47 @@ COALESCE(
   ),
   aa.name,
   ''
-) AS artist
+) AS artist,
+aa.id::text AS artist_id,
+s.track_no,
+s.disc_no,
+s.created_at,
+s.user_rating,
+mf.path AS file_path,
+mf.size AS file_size,
+mf.missing AS file_missing,
+st_song.created_at AS starred_at
 `
 
 const SONG_FROM = `
 FROM songs s
 JOIN albums al ON al.id = s.album_id
 JOIN artists aa ON aa.id = al.album_artist_id
+LEFT JOIN media_files mf ON mf.song_id = s.id
+LEFT JOIN stars st_song ON st_song.target_type = 'song' AND st_song.target_id = s.id
 `
 
 const SONG_ORDER = 's.disc_no ASC NULLS LAST, s.track_no ASC NULLS LAST, s.id ASC'
 
 function artistKey(id: string): string {
   return `${ARTIST_PREFIX}${id}`
+}
+
+/** 客户端用 coverArt 当头像 id，再去 getCoverArt 取图。没有这个字段就一直是占位。 */
+function artistJson(
+  id: string,
+  name: string,
+  albumCount?: number,
+  starred?: string,
+): Record<string, unknown> {
+  const artist: Record<string, unknown> = {
+    id: artistKey(id),
+    name,
+    coverArt: artistKey(id),
+  }
+  if (albumCount != null) artist.albumCount = albumCount
+  if (starred) artist.starred = starred
+  return artist
 }
 
 function albumKey(id: string): string {
@@ -195,6 +239,12 @@ function isoTime(value: Date | string): string {
   return date.toISOString()
 }
 
+/** 没收藏过就不带这个字段。客户端把 starred 当成布尔值，缺了心形不会亮。 */
+function starredIso(value: Date | string | null | undefined): string | undefined {
+  if (value == null || value === '') return undefined
+  return isoTime(value)
+}
+
 /**
  * ASCII 字母收成大写，同一位歌手不会因为大小写拆成两格。
  * 其他首字符保持原样，中文不会被塞进 #。没有首字符才进 #。
@@ -231,21 +281,57 @@ function groupArtists(rows: ArtistRow[]): Array<{ name: string; artists: ArtistR
     .map(([name, artists]) => ({ name, artists }))
 }
 
+const CONTENT_TYPE_BY_EXT: Record<string, string> = {
+  '.mp3': 'audio/mpeg',
+  '.flac': 'audio/flac',
+  '.wav': 'audio/wav',
+  '.ape': 'audio/x-ape',
+  '.m4a': 'audio/mp4',
+  '.ogg': 'audio/ogg',
+  '.aac': 'audio/aac',
+}
+
+/**
+ * 客户端把 contentType 当字符串调用 startsWith。缺了这个字段，曲目映射直接抛错，列表就是空的。
+ * 没有本地文件时按 mp3 报。播放不看这个字段，仍走原来的打开路径。
+ */
+function songMedia(row: SongRow): { contentType: string; suffix: string; size?: number } {
+  const path = row.file_path && row.file_missing !== true ? row.file_path : ''
+  const ext = extname(path).toLowerCase()
+  const contentType = CONTENT_TYPE_BY_EXT[ext]
+  if (!contentType) return { contentType: 'audio/mpeg', suffix: 'mp3' }
+  const sizeNum = row.file_size == null ? NaN : Number(row.file_size)
+  const size = Number.isFinite(sizeNum) && sizeNum >= 0 ? sizeNum : undefined
+  return { contentType, suffix: ext.slice(1), size }
+}
+
 function songJson(row: SongRow, starred?: string): Record<string, unknown> {
   // parent 和 coverArt 用专辑的对外 id（al-）。裸 bigint 会和歌曲 id 撞车。
+  // albumId 单独再给一份。只写 parent 时，客户端认不出这首歌属于哪张专辑。
   const albumId = albumKey(row.album_id)
+  const media = songMedia(row)
   const song: Record<string, unknown> = {
     id: row.id,
     parent: albumId,
+    albumId,
     title: row.title,
     album: row.album,
     artist: row.artist,
+    artistId: artistKey(row.artist_id),
     duration: durationSeconds(row.duration_ms),
+    created: isoTime(row.created_at),
     isDir: false,
     type: 'music',
     coverArt: albumId,
+    contentType: media.contentType,
+    suffix: media.suffix,
   }
-  if (starred) song.starred = starred
+  if (media.size != null) song.size = media.size
+  if (row.track_no != null && row.track_no > 0) song.track = row.track_no
+  if (row.disc_no != null && row.disc_no > 0) song.discNumber = row.disc_no
+  if (row.user_rating != null && row.user_rating > 0) song.userRating = row.user_rating
+  const marked = starred ?? starredIso(row.starred_at)
+  if (marked) song.starred = marked
   return song
 }
 
@@ -259,7 +345,8 @@ function albumJson(row: AlbumRow, starred?: string): Record<string, unknown> {
     songCount: countOf(row.song_count),
     duration: durationSeconds(row.duration_ms),
   }
-  if (starred) album.starred = starred
+  const marked = starred ?? starredIso(row.starred_at)
+  if (marked) album.starred = marked
   return album
 }
 
@@ -274,6 +361,14 @@ function notFound(c: Context, format: Format): Response {
 async function readSetting(pool: Pool, key: string): Promise<string | null> {
   const result = await pool.query<{ value: string }>('SELECT value FROM settings WHERE key = $1', [key])
   return result.rows[0]?.value ?? null
+}
+
+async function writeSetting(pool: Pool, key: string, value: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO settings (key, value) VALUES ($1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    [key, value],
+  )
 }
 
 /** 没写用户名时用 tinggui，和鉴权同一条规则，避免 getUser 和 u 对不上。 */
@@ -320,9 +415,11 @@ async function listArtists(pool: Pool): Promise<ArtistRow[]> {
   const result = await pool.query<ArtistRow>(
     `SELECT ar.id::text AS id,
             ar.name,
-            COUNT(al.id)::int AS album_count
+            COUNT(al.id)::int AS album_count,
+            MAX(st.created_at) AS starred_at
      FROM artists ar
      JOIN albums al ON al.album_artist_id = ar.id
+     LEFT JOIN stars st ON st.target_type = 'artist' AND st.target_id = ar.id
      GROUP BY ar.id, ar.name`,
   )
   return result.rows
@@ -333,11 +430,39 @@ async function albumsWhere(pool: Pool, where: string, orderBy: string, params: u
     `SELECT ${ALBUM_FIELDS}
      FROM albums al
      JOIN artists ar ON ar.id = al.album_artist_id
+     LEFT JOIN stars st_album ON st_album.target_type = 'album' AND st_album.target_id = al.id
      ${where}
      ORDER BY ${orderBy}`,
     params,
   )
   return result.rows
+}
+
+/**
+ * 入库时没有时长的歌，文件已经在本地就从文件头读一次并写回。
+ * 不写回的话，每次打开曲目都是 0，客户端把 0 当成没有时长。
+ */
+async function fillMissingDurations(
+  db: Pick<Pool | PoolClient, 'query'>,
+  rows: SongRow[],
+): Promise<void> {
+  for (const row of rows) {
+    if (durationSeconds(row.duration_ms) > 0) continue
+    if (!row.file_path || row.file_missing === true) continue
+    let ms: number | null
+    try {
+      const metadata = await parseFile(row.file_path, { duration: true, skipCovers: true })
+      ms = durationMs(metadata.format.duration)
+    } catch {
+      ms = null
+    }
+    if (ms == null || ms <= 0 || ms > PG_INT_MAX) continue
+    await db.query(
+      `UPDATE songs SET duration_ms = $2 WHERE id = $1::bigint AND duration_ms IS NULL`,
+      [row.id, ms],
+    )
+    row.duration_ms = ms
+  }
 }
 
 async function songsWhere(pool: Pool, where: string, orderBy: string, params: unknown[]): Promise<SongRow[]> {
@@ -348,6 +473,7 @@ async function songsWhere(pool: Pool, where: string, orderBy: string, params: un
      ORDER BY ${orderBy}`,
     params,
   )
+  await fillMissingDurations(pool, result.rows)
   return result.rows
 }
 
@@ -435,7 +561,8 @@ function imageContentType(header: Buffer): string {
 }
 
 function ping(c: Context, format: Format): Response {
-  return sendOk(c, {}, format)
+  // 没有 openSubsonic 时，客户端不读扩展列表，结构化歌词就不会被请求。
+  return sendOk(c, { openSubsonic: true }, format)
 }
 
 function getLicense(c: Context, format: Format): Response {
@@ -496,10 +623,9 @@ async function getIndexes(c: Context, deps: SubsonicDeps, format: Format): Promi
     indexes: {
       index: groups.map((group) => ({
         name: group.name,
-        artist: group.artists.map((artist) => ({
-          id: artistKey(artist.id),
-          name: artist.name,
-        })),
+        artist: group.artists.map((artist) => (
+          artistJson(artist.id, artist.name, undefined, starredIso(artist.starred_at))
+        )),
       })),
     },
   }, format)
@@ -524,6 +650,7 @@ async function getMusicDirectory(c: Context, deps: SubsonicDeps, format: Format)
           isDir: true,
           title: artist.name,
           artist: artist.name,
+          coverArt: artistKey(artist.id),
         })),
       },
     }, format)
@@ -588,11 +715,9 @@ async function getArtists(c: Context, deps: SubsonicDeps, format: Format): Promi
     artists: {
       index: groups.map((group) => ({
         name: group.name,
-        artist: group.artists.map((artist) => ({
-          id: artistKey(artist.id),
-          name: artist.name,
-          albumCount: countOf(artist.album_count),
-        })),
+        artist: group.artists.map((artist) => (
+          artistJson(artist.id, artist.name, countOf(artist.album_count), starredIso(artist.starred_at))
+        )),
       })),
     },
   }, format)
@@ -602,8 +727,11 @@ async function getArtist(c: Context, deps: SubsonicDeps, format: Format): Promis
   const id = parseArtistId(c.req.query('id')?.trim())
   if (!c.req.query('id')?.trim()) return missing(c, format)
   if (!id) return notFound(c, format)
-  const artist = await deps.pool.query<{ id: string; name: string }>(
-    'SELECT id::text AS id, name FROM artists WHERE id = $1::bigint',
+  const artist = await deps.pool.query<{ id: string; name: string; starred_at: Date | string | null }>(
+    `SELECT ar.id::text AS id, ar.name, st.created_at AS starred_at
+     FROM artists ar
+     LEFT JOIN stars st ON st.target_type = 'artist' AND st.target_id = ar.id
+     WHERE ar.id = $1::bigint`,
     [id],
   )
   const row = artist.rows[0]
@@ -616,9 +744,7 @@ async function getArtist(c: Context, deps: SubsonicDeps, format: Format): Promis
   )
   return sendOk(c, {
     artist: {
-      id: artistKey(row.id),
-      name: row.name,
-      albumCount: albums.length,
+      ...artistJson(row.id, row.name, albums.length, starredIso(row.starred_at)),
       album: albums.map((album) => albumJson(album)),
     },
   }, format)
@@ -633,6 +759,9 @@ async function getAlbum(c: Context, deps: SubsonicDeps, format: Format): Promise
   const album = albums[0]
   if (!album) return notFound(c, format)
   const songs = await songsWhere(deps.pool, 'WHERE s.album_id = $1::bigint', SONG_ORDER, [id])
+  // 专辑时长是进查询时加总的。刚从文件补上的曲目时长还没进这次的 SUM。
+  const filledMs = songs.reduce((sum, song) => sum + Math.max(0, Number(song.duration_ms) || 0), 0)
+  if (filledMs > 0 && durationSeconds(album.duration_ms) === 0) album.duration_ms = filledMs
   return sendOk(c, {
     album: {
       ...albumJson(album),
@@ -697,8 +826,8 @@ async function getAlbumList2(c: Context, deps: SubsonicDeps, format: Format): Pr
   } else if (type === 'random') {
     orderBy = 'random(), al.id ASC'
   } else if (type === 'starred') {
-    where = `JOIN stars st ON st.target_type = 'album' AND st.target_id = al.id`
-    orderBy = 'st.created_at DESC, al.id ASC'
+    where = 'WHERE st_album.target_id IS NOT NULL'
+    orderBy = 'st_album.created_at DESC, al.id ASC'
   } else {
     return empty
   }
@@ -710,11 +839,21 @@ async function getAlbumList2(c: Context, deps: SubsonicDeps, format: Format): Pr
   }, format)
 }
 
-async function getStarred2(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
+/**
+ * getStarred 和 getStarred2 是同一份收藏，只是外层字段名不同。
+ * Feishin 读 getStarred.view 的 starred；只实现 starred2 时，收藏页一直是空的。
+ */
+async function getStarred2(
+  c: Context,
+  deps: SubsonicDeps,
+  format: Format,
+  key: 'starred' | 'starred2',
+): Promise<Response> {
+  const empty = { artist: [], album: [], song: [] }
   if (!folderMatches(c.req.query('musicFolderId'))) {
-    return sendOk(c, { starred2: { artist: [], album: [], song: [] } }, format)
+    return sendOk(c, { [key]: empty }, format)
   }
-  const artists = await deps.pool.query<ArtistRow & { starred_at: Date }>(
+  const artists = await deps.pool.query<ArtistRow>(
     `SELECT ar.id::text AS id,
             ar.name,
             (SELECT COUNT(*)::int FROM albums al WHERE al.album_artist_id = ar.id) AS album_count,
@@ -724,31 +863,26 @@ async function getStarred2(c: Context, deps: SubsonicDeps, format: Format): Prom
      WHERE st.target_type = 'artist'
      ORDER BY st.created_at DESC, ar.id ASC`,
   )
-  const albums = await deps.pool.query<AlbumRow & { starred_at: Date }>(
-    `SELECT ${ALBUM_FIELDS},
-            st.created_at AS starred_at
-     FROM albums al
-     JOIN artists ar ON ar.id = al.album_artist_id
-     JOIN stars st ON st.target_type = 'album' AND st.target_id = al.id
-     ORDER BY st.created_at DESC, al.id ASC`,
+  const albums = await albumsWhere(
+    deps.pool,
+    'WHERE st_album.target_id IS NOT NULL',
+    'st_album.created_at DESC, al.id ASC',
+    [],
   )
-  const songs = await deps.pool.query<SongRow & { starred_at: Date }>(
-    `SELECT ${SONG_FIELDS},
-            st.created_at AS starred_at
+  const songs = await deps.pool.query<SongRow>(
+    `SELECT ${SONG_FIELDS}
      ${SONG_FROM}
-     JOIN stars st ON st.target_type = 'song' AND st.target_id = s.id
-     ORDER BY st.created_at DESC, s.id ASC`,
+     WHERE st_song.target_id IS NOT NULL
+     ORDER BY st_song.created_at DESC, s.id ASC`,
   )
+  await fillMissingDurations(deps.pool, songs.rows)
   return sendOk(c, {
-    starred2: {
-      artist: artists.rows.map((artist) => ({
-        id: artistKey(artist.id),
-        name: artist.name,
-        albumCount: countOf(artist.album_count),
-        starred: isoTime(artist.starred_at),
-      })),
-      album: albums.rows.map((album) => albumJson(album, isoTime(album.starred_at))),
-      song: songs.rows.map((song) => songJson(song, isoTime(song.starred_at))),
+    [key]: {
+      artist: artists.rows.map((artist) => (
+        artistJson(artist.id, artist.name, countOf(artist.album_count), starredIso(artist.starred_at))
+      )),
+      album: albums.map((album) => albumJson(album)),
+      song: songs.rows.map((song) => songJson(song)),
     },
   }, format)
 }
@@ -765,6 +899,7 @@ async function getRandomSongs(c: Context, deps: SubsonicDeps, format: Format): P
      LIMIT $1`,
     [size],
   )
+  await fillMissingDurations(deps.pool, result.rows)
   return sendOk(c, {
     randomSongs: { song: result.rows.map((song) => songJson(song)) },
   }, format)
@@ -781,8 +916,28 @@ async function play(
   return openSong.open(id, c.req.header('range'))
 }
 
+/**
+ * 库里没有单独的歌手照片。客户端只认 coverArt，再拿这个 id 来要图。
+ * 艺术家 id 就用他第一张专辑的封面，优先已经缓存过的那张。
+ */
+async function albumIdForCover(deps: SubsonicDeps, raw: string | undefined): Promise<string | null> {
+  if (!raw) return null
+  if (!raw.startsWith(ARTIST_PREFIX)) return parseAlbumId(raw)
+  const artistId = parseArtistId(raw)
+  if (!artistId) return null
+  const found = await deps.pool.query<{ id: string }>(
+    `SELECT al.id::text AS id
+     FROM albums al
+     WHERE al.album_artist_id = $1::bigint
+     ORDER BY (al.cover_path <> '') DESC, al.id ASC
+     LIMIT 1`,
+    [artistId],
+  )
+  return found.rows[0]?.id ?? null
+}
+
 async function getCoverArt(c: Context, deps: SubsonicDeps): Promise<Response> {
-  const albumId = parseAlbumId(c.req.query('id')?.trim())
+  const albumId = await albumIdForCover(deps, c.req.query('id')?.trim())
   if (!albumId) return new Response(null, { status: 404 })
   const found = await coverFile({
     pool: deps.pool,
@@ -1015,6 +1170,7 @@ async function playlistSongs(db: Queryable, playlistId: string): Promise<SongRow
      ORDER BY pi.position ASC`,
     [playlistId],
   )
+  await fillMissingDurations(db, result.rows)
   return result.rows
 }
 
@@ -1231,8 +1387,10 @@ async function searchLibrary(
     : (await deps.pool.query<ArtistRow>(
       `SELECT ar.id::text AS id,
               ar.name,
-              (SELECT COUNT(*)::int FROM albums al WHERE al.album_artist_id = ar.id) AS album_count
+              (SELECT COUNT(*)::int FROM albums al WHERE al.album_artist_id = ar.id) AS album_count,
+              st.created_at AS starred_at
        FROM artists ar
+       LEFT JOIN stars st ON st.target_type = 'artist' AND st.target_id = ar.id
        WHERE ar.name ILIKE '%' || $1 || '%'
        ORDER BY ar.name ASC, ar.id ASC
        LIMIT $2 OFFSET $3`,
@@ -1265,11 +1423,9 @@ async function searchLibrary(
     )
   return sendOk(c, {
     [key]: {
-      artist: artists.map((artist) => ({
-        id: artistKey(artist.id),
-        name: artist.name,
-        albumCount: countOf(artist.album_count),
-      })),
+      artist: artists.map((artist) => (
+        artistJson(artist.id, artist.name, countOf(artist.album_count), starredIso(artist.starred_at))
+      )),
       album: albums.map((album) => albumJson(album)),
       song: songs.map((song) => songJson(song)),
     },
@@ -1386,6 +1542,168 @@ async function scrobble(c: Context, deps: SubsonicDeps, format: Format): Promise
   return sendOk(c, {}, format)
 }
 
+/** 库里没有风格。空列表是成功，不能用「未实现」：那个错误码客户端会当成 HTTP 成功再去读字段。 */
+function getGenres(c: Context, format: Format): Response {
+  return sendOk(c, { genres: { genre: [] } }, format)
+}
+
+function getSongsByGenre(c: Context, format: Format): Response {
+  return sendOk(c, { songsByGenre: { song: [] } }, format)
+}
+
+/** 没有专辑简介。给空对象，客户端才不会在缺字段时抛错。 */
+function getAlbumInfo2(c: Context, format: Format): Response {
+  return sendOk(c, { albumInfo: {} }, format)
+}
+
+function getArtistInfo2(c: Context, format: Format): Response {
+  return sendOk(c, { artistInfo2: {} }, format)
+}
+
+function emptySimilar(c: Context, format: Format, key: 'similarSongs' | 'similarSongs2'): Response {
+  return sendOk(c, { [key]: { song: [] } }, format)
+}
+
+async function getScanStatus(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
+  const counts = await deps.pool.query<{ songs: number; folders: number }>(
+    `SELECT
+       (SELECT COUNT(*)::int FROM songs) AS songs,
+       (SELECT COUNT(*)::int FROM library_roots) AS folders`,
+  )
+  const row = counts.rows[0]
+  return sendOk(c, {
+    scanStatus: {
+      scanning: false,
+      count: countOf(row?.songs ?? 0),
+      folderCount: countOf(row?.folders ?? 0),
+    },
+  }, format)
+}
+
+function startScan(c: Context, format: Format): Response {
+  // 扫描走管理接口。这里回成功，客户端才不会把「未实现」当成扫描失败。
+  return sendOk(c, {}, format)
+}
+
+const PLAY_QUEUE_KEY = 'subsonicPlayQueue'
+
+type PlayQueueState = {
+  ids: string[]
+  current: string | null
+  position: number
+  changed: string
+}
+
+function readPlayQueue(raw: string | null): PlayQueueState {
+  const empty: PlayQueueState = { ids: [], current: null, position: 0, changed: new Date().toISOString() }
+  if (!raw) return empty
+  try {
+    const parsed = JSON.parse(raw) as Partial<PlayQueueState>
+    const ids = Array.isArray(parsed.ids) ? parsed.ids.filter((id) => typeof id === 'string') : []
+    const current = typeof parsed.current === 'string' ? parsed.current : null
+    const position = typeof parsed.position === 'number' && parsed.position >= 0 ? Math.trunc(parsed.position) : 0
+    const changed = typeof parsed.changed === 'string' ? parsed.changed : empty.changed
+    return { ids, current, position, changed }
+  } catch {
+    return empty
+  }
+}
+
+function queuePosition(raw: string | undefined): number {
+  if (raw == null || raw.trim() === '') return 0
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value < 0) return 0
+  return Math.trunc(value)
+}
+
+async function existingSongIds(pool: Pool, ids: string[]): Promise<string[]> {
+  if (ids.length === 0) return []
+  const found = await pool.query<{ id: string }>(
+    'SELECT id::text AS id FROM songs WHERE id::text = ANY($1::text[])',
+    [[...new Set(ids)]],
+  )
+  const live = new Set(found.rows.map((row) => row.id))
+  return ids.filter((id) => live.has(id))
+}
+
+async function savePlayQueue(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
+  const listed = queryValues(c, 'id') ?? []
+  const parsed = listed.length === 0 ? [] : parseSongIdList(listed)
+  if (!parsed) return notFound(c, format)
+  const ids = await existingSongIds(deps.pool, parsed)
+  const currentRaw = c.req.query('current')?.trim()
+  const current = currentRaw ? parseSongId(currentRaw) : null
+  if (currentRaw && !current) return notFound(c, format)
+  const state: PlayQueueState = {
+    ids,
+    current: current && ids.includes(current) ? current : null,
+    position: queuePosition(c.req.query('position')),
+    changed: new Date().toISOString(),
+  }
+  await writeSetting(deps.pool, PLAY_QUEUE_KEY, JSON.stringify(state))
+  return sendOk(c, {}, format)
+}
+
+async function getPlayQueue(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
+  const state = readPlayQueue(await readSetting(deps.pool, PLAY_QUEUE_KEY))
+  const username = await readUser(deps.pool)
+  const rows = state.ids.length === 0
+    ? []
+    : await songsWhere(deps.pool, 'WHERE s.id::text = ANY($1::text[])', 's.id ASC', [state.ids])
+  const byId = new Map(rows.map((row) => [row.id, row]))
+  const entry = state.ids.flatMap((id) => {
+    const row = byId.get(id)
+    return row ? [songJson(row)] : []
+  })
+  const queue: Record<string, unknown> = {
+    username,
+    changed: state.changed,
+    changedBy: username,
+    position: state.position,
+    entry,
+  }
+  if (state.current && byId.has(state.current)) queue.current = state.current
+  return sendOk(c, { playQueue: queue }, format)
+}
+
+async function setRating(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
+  const id = parseSongId(c.req.query('id')?.trim())
+  const raw = c.req.query('rating')?.trim()
+  if (!id || raw == null || raw === '') return missing(c, format)
+  const rating = Number(raw)
+  if (!Number.isInteger(rating) || rating < 0 || rating > 5) return notFound(c, format)
+  if (!(await libraryIdsExist(deps.pool, 'songs', [id]))) return notFound(c, format)
+  await deps.pool.query(
+    'UPDATE songs SET user_rating = $2 WHERE id = $1::bigint',
+    [id, rating === 0 ? null : rating],
+  )
+  return sendOk(c, {}, format)
+}
+
+async function getTopSongs(c: Context, deps: SubsonicDeps, format: Format): Promise<Response> {
+  const count = bounded(c.req.query('count'), 50, 500)
+  const artistId = parseArtistId(c.req.query('id')?.trim())
+  const artist = c.req.query('artist')?.trim() ?? ''
+  if (!artistId && !artist) return sendOk(c, { topSongs: { song: [] } }, format)
+  const where = artistId
+    ? `WHERE aa.id = $1::bigint OR EXISTS (
+         SELECT 1 FROM song_artists sa
+         WHERE sa.song_id = s.id AND sa.artist_id = $1::bigint
+       )`
+    : `WHERE aa.name = $1 OR EXISTS (
+         SELECT 1 FROM song_artists sa
+         JOIN artists ar ON ar.id = sa.artist_id
+         WHERE sa.song_id = s.id AND ar.name = $1
+       )`
+  const songs = await songsWhere(
+    deps.pool,
+    where,
+    `${SONG_ORDER} LIMIT $2`,
+    [artistId ?? artist, count],
+  )
+  return sendOk(c, { topSongs: { song: songs.map((song) => songJson(song)) } }, format)
+}
+
 /**
  * 播放地址缓存在这一份 openSong 上。每个请求新建的话，拖动进度条会反复问脚本要地址。
  */
@@ -1415,13 +1733,26 @@ export function mountSubsonic(app: Hono, deps: SubsonicDeps): void {
     getAlbum: (c, format) => getAlbum(c, deps, format),
     getSong: (c, format) => getSong(c, deps, format),
     getAlbumList2: (c, format) => getAlbumList2(c, deps, format),
-    getStarred2: (c, format) => getStarred2(c, deps, format),
+    getStarred: (c, format) => getStarred2(c, deps, format, 'starred'),
+    getStarred2: (c, format) => getStarred2(c, deps, format, 'starred2'),
     getRandomSongs: (c, format) => getRandomSongs(c, deps, format),
     stream: (c) => play(c, deps, openSong, playback),
     download: (c) => play(c, deps, openSong, playback),
     getCoverArt: (c) => getCoverArt(c, deps),
     getLyrics: (c, format) => getLyrics(c, deps, format),
     getLyricsBySongId: (c, format) => getLyricsBySongId(c, deps, format),
+    getGenres,
+    getSongsByGenre,
+    getAlbumInfo2,
+    getArtistInfo2,
+    getSimilarSongs: (c, format) => emptySimilar(c, format, 'similarSongs'),
+    getSimilarSongs2: (c, format) => emptySimilar(c, format, 'similarSongs2'),
+    getScanStatus: (c, format) => getScanStatus(c, deps, format),
+    startScan,
+    getPlayQueue: (c, format) => getPlayQueue(c, deps, format),
+    savePlayQueue: (c, format) => savePlayQueue(c, deps, format),
+    setRating: (c, format) => setRating(c, deps, format),
+    getTopSongs: (c, format) => getTopSongs(c, deps, format),
     getPlaylists: (c, format) => getPlaylists(c, deps, format),
     getPlaylist: (c, format) => getPlaylist(c, deps, format),
     createPlaylist: (c, format) => createPlaylist(c, deps, format),
@@ -1434,10 +1765,26 @@ export function mountSubsonic(app: Hono, deps: SubsonicDeps): void {
     scrobble: (c, format) => scrobble(c, deps, format),
   }
 
+  // 带 crossOrigin 的播放器会先发 OPTIONS。预检没有口令参数，不能走鉴权。
+  app.options('/rest/:view', (c) => {
+    const view = c.req.param('view')
+    if (view !== 'stream.view' && view !== 'download.view') return c.notFound()
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+        'Access-Control-Allow-Headers': 'Range',
+        'Access-Control-Expose-Headers': 'Accept-Ranges, Content-Length, Content-Range, Content-Type',
+        'Access-Control-Max-Age': '86400',
+      },
+    })
+  })
+
   app.get('/rest/:view', async (c) => {
     const view = c.req.param('view')
-    if (!view.endsWith('.view')) return c.notFound()
-    const name = view.slice(0, -'.view'.length)
+    // 相似歌曲的路径没有 .view。按没这个后缀也认，避免直接 404。
+    const name = view.endsWith('.view') ? view.slice(0, -'.view'.length) : view
     const handler = views[name]
     // 口令密钥对不上时 requireSubsonic 会抛。这里不接住，不能把它写成错误码 40。
     const auth = await requireSubsonic(c, deps)

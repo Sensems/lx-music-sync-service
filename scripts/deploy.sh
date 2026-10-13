@@ -7,6 +7,9 @@
 #   ./scripts/deploy.sh --skip-install  # 跳过依赖安装
 #   ./scripts/deploy.sh --skip-build    # 跳过前端构建
 #
+# 曲库在 Postgres。config.yaml 里的 databaseUrl 要自己填，脚本不会写连接串。
+# 清空曲库和缓存：node scripts/reset.mjs --yes
+#
 # 可选环境变量：
 #   HOST=0.0.0.0                         覆盖 config.yaml 的 host
 #   PORT=9000                            覆盖 config.yaml 的 port
@@ -87,9 +90,9 @@ if [ "$BUILD" = 1 ]; then
   npm --prefix web run build
 fi
 
-# 4) 配置：config.yaml 不入库，首次部署自动生成
+# 4) 配置：config.yaml 不入库，首次部署从模板复制。模板里的 databaseUrl 是注释，复制完还不能连库。
 if [ ! -f config.yaml ]; then
-  log '生成 config.yaml（来自 config.example.yaml）'
+  log '生成 config.yaml（来自 config.example.yaml，还要自己补 databaseUrl）'
   cp config.example.yaml config.yaml
 fi
 
@@ -107,6 +110,10 @@ if [ -n "${PORT:-}" ]; then
   esac
   log "覆盖 config.yaml 的 port = $PORT"
   sed -i.bak -E "s/^port:.*/port: $PORT/" config.yaml && rm -f config.yaml.bak
+fi
+
+if ! grep -Eq '^[[:space:]]*databaseUrl:[[:space:]]*[^#[:space:]]' config.yaml; then
+  warn 'config.yaml 没有可用的 databaseUrl。曲库在 Postgres，补上连接串后再启动，否则服务起不来'
 fi
 
 # 5) 运行期目录与音源脚本

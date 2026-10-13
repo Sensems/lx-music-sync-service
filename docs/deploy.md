@@ -24,7 +24,7 @@ npm i -g pm2
 1. `git pull --ff-only`（工作区有未提交改动或没配远程就跳过）
 2. 装后端依赖：有 `pnpm-lock.yaml` 且装了 pnpm 用 `pnpm install --frozen-lockfile`，否则 `npm ci`
 3. 装前端依赖并 `npm --prefix web run build` 生成 `web/dist`
-4. 没有 `config.yaml` 就从 `config.example.yaml` 生成一份
+4. 没有 `config.yaml` 就从 `config.example.yaml` 生成一份，并检查是否写了 `databaseUrl`
 5. 建好 `data/user-api`、`logs`
 6. `pm2 startOrReload ecosystem.config.cjs` + `pm2 save`，最后打一次健康检查
 
@@ -119,6 +119,14 @@ pm2 restart lx-music-sync
 | `data/subsonic.key` | 还原 Subsonic 口令的密钥 |
 
 备份要同时带上 Postgres 和整个 `data/`。`data/lx-sync.db` 是旧版 SQLite，新曲库不会读它。
+
+清空曲库、缓存、封面和口令密钥，回到刚建好空表的状态（保留 `config.yaml` 和音源脚本）：
+
+```bash
+node scripts/reset.mjs --yes
+```
+
+不带 `--yes` 只打印将要删什么。脚本会断开正在使用这份库的连接，跑完后重启服务。
 
 ## 单进程约束
 

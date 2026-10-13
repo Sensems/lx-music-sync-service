@@ -14,6 +14,7 @@ export interface Playlist {
 
 export interface Track {
   songKey: string
+  songId?: string
   name: string
   singer: string
   album: string
@@ -36,6 +37,7 @@ export interface SearchHit {
   source: SourceId
   interval?: number | null
   meta?: Record<string, unknown>
+  picUrl?: string
 }
 
 export interface JobLine {

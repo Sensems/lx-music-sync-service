@@ -1,70 +1,61 @@
+export type JobSnapshot = {
+  status: string
+  result: Record<string, unknown> | null
+  error_summary: string | null
+}
+
+async function readJson(r: Response, fallback: string) {
+  const body = await r.json()
+  if (!r.ok) throw new Error(body.error || fallback)
+  return body
+}
+
 export const api = {
-  playlists: () => fetch('/api/playlists').then(r => r.json()),
-  tracks: (id: number) => fetch(`/api/playlists/${id}/tracks`).then(r => r.json()),
-  addPlaylist: (body: { source: string; url: string }) =>
-    fetch('/api/playlists', {
+  subscriptions: () =>
+    fetch('/api/subscriptions').then(r => readJson(r, '加载歌单失败')),
+  subscriptionTracks: (id: string) =>
+    fetch(`/api/subscriptions/${encodeURIComponent(id)}/tracks`).then(r => readJson(r, '加载曲目失败')),
+  addSubscription: (body: { platform: string; sourceUrl: string }) =>
+    fetch('/api/subscriptions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }).then(async r => {
-      const body = await r.json()
-      if (!r.ok) throw new Error(body.error || '添加失败')
-      return body
-    }),
-  refreshPlaylist: (id: number) =>
-    fetch(`/api/playlists/${id}/refresh`, { method: 'POST' }).then(async r => {
-      const body = await r.json()
-      if (!r.ok) throw new Error(body.error || '拉取曲目失败')
-      return body
-    }),
-  patchPlaylist: (id: number, body: object) =>
-    fetch(`/api/playlists/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }).then(r => r.json()),
-  syncPlaylist: (id: number) =>
-    fetch(`/api/playlists/${id}/sync`, { method: 'POST' }).then(r => r.json()),
-  syncAll: () => fetch('/api/sync', { method: 'POST' }).then(r => r.json()),
+    }).then(r => readJson(r, '添加失败') as Promise<{ playlistId: string }>),
+  refreshSubscription: (id: string) =>
+    fetch(`/api/subscriptions/${encodeURIComponent(id)}/refresh`, { method: 'POST' }).then(
+      r => readJson(r, '拉取曲目失败') as Promise<{ jobId: string }>,
+    ),
+  cachePlaylist: (id: string) =>
+    fetch(`/api/cache/playlists/${encodeURIComponent(id)}`, { method: 'POST' }).then(
+      r => readJson(r, '缓存失败') as Promise<{ jobId: string }>,
+    ),
+  cachedSongs: () => fetch('/api/library/cached').then(r => readJson(r, '加载唱片墙失败')),
+  streamUrl: (songId: string) => `/api/library/songs/${encodeURIComponent(songId)}/stream`,
   jobs: () => fetch('/api/jobs', { cache: 'no-store' }).then(r => r.json()),
   search: (source: string, q: string) =>
     fetch(`/api/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`).then(r =>
       r.json(),
     ),
-  download: (musicInfo: unknown) =>
-    fetch('/api/downloads', {
+  addLibraryTrack: (musicInfo: object) =>
+    fetch('/api/library/tracks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ musicInfo }),
+      body: JSON.stringify(musicInfo),
     }).then(async r => {
+      const body = await r.json()
+      if (!r.ok) throw new Error(body.error || '入库失败')
+      return body as { songId: string }
+    }),
+  cacheSong: (songId: string) =>
+    fetch(`/api/cache/songs/${encodeURIComponent(songId)}`, { method: 'POST' }).then(async r => {
       const body = await r.json()
       if (!r.ok) throw new Error(body.error || '下载失败')
-      return body
+      return body as { jobId: string }
     }),
-  downloads: () => fetch('/api/downloads').then(r => r.json()),
-  backfillCovers: () =>
-    fetch('/api/downloads/backfill-covers', { method: 'POST' }).then(async r => {
-      const body = await r.json()
-      if (!r.ok) throw new Error(body.error || '补封面失败')
-      return body
-    }),
-  lyrics: (songKey: string) =>
-    fetch(`/api/lyrics?songKey=${encodeURIComponent(songKey)}`).then(async r => {
-      const body = await r.json()
-      if (!r.ok) throw new Error(body.error || '歌词获取失败')
-      return body
-    }),
-  rememberStream: (musicInfo: unknown) =>
-    fetch('/api/stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ musicInfo }),
-    }).then(async r => {
-      const body = await r.json()
-      if (!r.ok) throw new Error(body.error || '暂时没有可播放的地址')
-      return body as { songKey: string }
-    }),
-  streamUrl: (songKey: string) => `/api/stream?songKey=${encodeURIComponent(songKey)}`,
+  job: (id: string) =>
+    fetch(`/api/jobs/${encodeURIComponent(id)}`, { cache: 'no-store' }).then(
+      r => readJson(r, '任务查询失败') as Promise<JobSnapshot>,
+    ),
   lyricsFor: (input: { songKey?: string; musicInfo?: unknown }) =>
     fetch('/api/lyrics', {
       method: 'POST',
@@ -73,7 +64,7 @@ export const api = {
     }).then(async r => {
       const body = await r.json()
       if (!r.ok) throw new Error(body.error || '歌词获取失败')
-      return body as { lyric: string; tlyric?: string }
+      return body as { lyric: string; tlyric?: string; picUrl?: string }
     }),
   settings: () => fetch('/api/settings').then(r => r.json()),
   putSettings: (body: object) =>
@@ -81,7 +72,7 @@ export const api = {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }).then(r => r.json()),
+    }).then(r => readJson(r, '保存失败')),
   uploadUserApi: (file: File) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -98,4 +89,14 @@ export const api = {
       return body
     }),
   sourceStatus: () => fetch('/api/source/status').then(r => r.json()),
+}
+
+/** 缓存和刷新都是排队任务。调用方决定要不要中途停下轮询。 */
+export async function waitJob(jobId: string, shouldStop?: () => boolean): Promise<JobSnapshot | null> {
+  for (;;) {
+    const job = await api.job(jobId)
+    if (job.status === 'success' || job.status === 'failed') return job
+    if (shouldStop?.()) return null
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+  }
 }

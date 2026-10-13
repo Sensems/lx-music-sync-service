@@ -47,7 +47,7 @@
 - **多平台搜索**：`source=all` 时并发搜索全部平台，按 `id` 去重合并，单个平台报错不影响整体结果。
 - **定时刷新**：内置 cron（每 6 小时 / 每天固定时刻 / 自定义 cron 表达式），默认关闭；可选顺带扫目录。
 - **播放与缓存**：有本地文件就按文件送；没有文件就按音源顺序取地址。缓存是单独动作，不在定时里跑。
-- **Web 界面**：歌单 / 唱片墙 / 搜索 / 任务 / 设置五个页面，7 套主题（默认 `nightwood` 夜木），偏好存在 `localStorage`。
+- **Web 界面**：歌单 / 唱片墙（已下载）/ 搜索 / 任务 / 设置五个页面，12 套主题（默认 `nightwood` 夜木），偏好存在 `localStorage`。
 
 ## 它是怎么工作的
 
@@ -124,6 +124,10 @@
 │   ├── sdk/                  # musicSdk 包装与各平台刮削
 │   └── lib/                  # 音质、MusicInfo 归一化、cron 表达式
 ├── web/                      # 「听柜」前端（Vue 3 + Vite）
+│   ├── src/api.ts            # 后端 API 客户端
+│   ├── src/router.ts         # /shelf /wall /search /tape /cabinet /now
+│   ├── src/themes.ts         # 12 套主题 token
+│   └── src/views/            # 五个页面
 ├── test/                     # 已有 Vitest 用例；不要为新改动补测
 ├── bin/lx-sync.mjs           # 生产入口：进程内注册 tsx，直接跑 TS
 ├── scripts/deploy.sh         # 一键部署 / 更新（PM2）

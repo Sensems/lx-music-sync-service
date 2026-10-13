@@ -1,121 +1,53 @@
 <script setup lang="ts">
-import { reactive, ref, computed, watch, onMounted } from 'vue'
+import { reactive, ref, onMounted } from 'vue'
 import { Form, Input, Select, Modal, message } from 'ant-design-vue'
-import RecordSpine from '../components/RecordSpine.vue'
-import SleevePanel from '../components/SleevePanel.vue'
-import { api } from '../api'
-import { sourceLabels, type Playlist, type SourceId, type Track } from '../mock/data'
+import { useRouter } from 'vue-router'
+import PlaylistCard from '../components/PlaylistCard.vue'
+import { api, waitJob } from '../api'
+import { mapPlaylist } from '../playlists'
+import { sourceLabels, type Playlist, type SourceId } from '../mock/data'
 
-const SPINES = ['#6B2D3C', '#3D4A2A', '#2A3A4A', '#5A3D1E', '#4A1F2A', '#3A2A4A']
+const COLS_KEY = 'tingui-shelf-cols'
 
+const router = useRouter()
 const list = ref<Playlist[]>([])
-const selectedId = ref('')
-const tracks = ref<Track[]>([])
-const pendingSyncIds = ref<number[]>([])
 const showInsert = ref(false)
 const form = reactive({ source: undefined as SourceId | undefined, url: '' })
 const loading = ref(true)
-
-const selected = computed(() => list.value.find(p => p.id === selectedId.value) ?? list.value[0])
-const syncing = computed(() => {
-  const id = selected.value ? Number(selected.value.id) : NaN
-  return Number.isFinite(id) && pendingSyncIds.value.includes(id)
-})
+const cols = ref<1 | 2>(2)
 
 const sourceOptions = (Object.keys(sourceLabels) as SourceId[]).map(id => ({
   value: id,
   label: sourceLabels[id],
 }))
 
-function spineFor(id: string | number): string {
-  const n = typeof id === 'number' ? id : Number(id) || 0
-  return SPINES[Math.abs(n) % SPINES.length]
-}
-
-function mapPlaylist(row: Record<string, unknown>): Playlist {
-  const id = String(row.id)
-  return {
-    id,
-    source: row.source as SourceId,
-    url: String(row.url ?? ''),
-    name: String(row.name || '未命名歌单'),
-    enabled: row.enabled === 1 || row.enabled === true,
-    trackCount: Number(row.trackCount ?? 0),
-    downloaded: Number(row.downloaded ?? 0),
-    spine: spineFor(row.id as number),
-    coverUrl: String(row.coverUrl || '') || undefined,
-  }
-}
-
-async function loadTracks(id: string) {
-  if (!id) {
-    tracks.value = []
-    return
-  }
+function readCols(): 1 | 2 {
   try {
-    const body = await api.tracks(Number(id))
-    tracks.value = (body.list ?? []) as Track[]
+    return localStorage.getItem(COLS_KEY) === '1' ? 1 : 2
   } catch {
-    tracks.value = []
+    return 2
+  }
+}
+
+function setCols(next: 1 | 2) {
+  cols.value = next
+  try {
+    localStorage.setItem(COLS_KEY, String(next))
+  } catch {
+    /* ignore */
   }
 }
 
 async function refresh() {
   loading.value = true
   try {
-    const body = await api.playlists()
+    const body = await api.subscriptions()
     list.value = (body.list ?? []).map(mapPlaylist)
-    if (!list.value.find(p => p.id === selectedId.value)) {
-      selectedId.value = list.value[0]?.id ?? ''
-    }
-    await loadTracks(selectedId.value)
   } catch (err) {
     message.error(err instanceof Error ? err.message : '加载歌单失败')
   } finally {
     loading.value = false
   }
-}
-
-function pick(id: string) {
-  selectedId.value = id
-}
-
-async function setEnabled(value: boolean) {
-  if (!selected.value) return
-  try {
-    await api.patchPlaylist(Number(selected.value.id), { enabled: value })
-    selected.value.enabled = value
-    message.success(value ? '已加入定时同步' : '已暂停定时同步')
-  } catch {
-    message.error('更新失败')
-  }
-}
-
-function pressSync() {
-  if (!selected.value) return
-  const id = Number(selected.value.id)
-  const name = selected.value.name
-  pendingSyncIds.value = [...pendingSyncIds.value, id]
-  message.success(`已加入同步队列：${name}`)
-  void api
-    .syncPlaylist(id)
-    .then(async job => {
-      if (job?.status === 'failed') message.error(`同步失败：${name}`)
-      else message.success(`同步完成：${name}`)
-      await refresh()
-    })
-    .catch(err => {
-      message.error(err instanceof Error ? err.message : '同步失败')
-    })
-    .finally(() => {
-      const idx = pendingSyncIds.value.indexOf(id)
-      if (idx >= 0) {
-        pendingSyncIds.value = [
-          ...pendingSyncIds.value.slice(0, idx),
-          ...pendingSyncIds.value.slice(idx + 1),
-        ]
-      }
-    })
 }
 
 async function submitInsert() {
@@ -124,14 +56,17 @@ async function submitInsert() {
     return
   }
   try {
-    const row = await api.addPlaylist({ source: form.source, url: form.url.trim() })
-    selectedId.value = String(row.id)
+    const row = await api.addSubscription({ platform: form.source, sourceUrl: form.url.trim() })
     showInsert.value = false
     form.source = undefined
     form.url = ''
     message.loading({ content: '正在拉取曲目列表…', key: 'refresh-plist', duration: 0 })
     try {
-      await api.refreshPlaylist(Number(row.id))
+      const queued = await api.refreshSubscription(row.playlistId)
+      const job = await waitJob(queued.jobId)
+      if (!job || job.status === 'failed') {
+        throw new Error(job?.error_summary || '拉取曲目失败')
+      }
       message.success({ content: '歌单已添加，曲目列表已更新（尚未下载）', key: 'refresh-plist' })
     } catch (err) {
       message.warning({
@@ -139,54 +74,64 @@ async function submitInsert() {
         key: 'refresh-plist',
       })
     }
-    await refresh()
+    await router.push({ name: 'shelf-detail', params: { id: row.playlistId } })
   } catch {
     message.error('添加失败，请检查平台和链接')
   }
 }
 
-watch(selectedId, id => {
-  void loadTracks(id)
-})
-
 onMounted(() => {
+  cols.value = readCols()
   void refresh()
 })
 </script>
 
 <template>
-  <section>
-    <p class="text-mute text-sm mb-4">选择左侧歌单查看曲目；点「+」添加新歌单。</p>
-    <div class="flex flex-col lg:flex-row gap-6 items-stretch">
-      <div
-        class="shelf-spines flex gap-3 overflow-x-auto py-2 pr-2 stagger-in"
-        role="listbox"
-        aria-label="歌单列表"
-      >
-        <RecordSpine
-          v-for="p in list"
-          :key="p.id"
-          :playlist="p"
-          :selected="p.id === selected?.id"
-          @pick="pick(p.id)"
-        />
-        <RecordSpine insert @pick="showInsert = true" />
+  <section class="shelf page-measure">
+    <header class="shelf-head">
+      <div>
+        <p class="page-kicker">SHELF</p>
+        <h2 class="shelf-title">歌单</h2>
+        <p class="shelf-lede">点一张看里面的曲目。点「+」再订一份。</p>
       </div>
-      <div class="flex-1 min-w-0">
-        <SleevePanel
-          v-if="selected"
-          :playlist="selected"
-          :tracks="tracks"
-          :syncing="syncing"
-          @update:enabled="setEnabled"
-          @press="pressSync"
-        />
-        <div v-else class="bg-card text-ink p-8">
-          <p class="font-display text-3xl m-0">{{ loading ? '加载中…' : '还没有歌单' }}</p>
-          <p class="mt-2">添加一张歌单：选择平台，粘贴链接即可。</p>
-          <a-button type="primary" class="mt-4 stamp !text-ink" @click="showInsert = true">添加歌单</a-button>
-        </div>
+      <div class="shelf-cols" role="group" aria-label="列表列数">
+        <button
+          type="button"
+          class="shelf-cols__btn"
+          :class="cols === 1 ? 'is-on' : ''"
+          :aria-pressed="cols === 1"
+          @click="setCols(1)"
+        >
+          <span class="i-lucide-rows-2" aria-hidden="true" />
+          单列
+        </button>
+        <button
+          type="button"
+          class="shelf-cols__btn"
+          :class="cols === 2 ? 'is-on' : ''"
+          :aria-pressed="cols === 2"
+          @click="setCols(2)"
+        >
+          <span class="i-lucide-layout-grid" aria-hidden="true" />
+          双列
+        </button>
       </div>
+    </header>
+
+    <div
+      class="shelf-grid stagger-in"
+      :class="cols === 1 ? 'shelf-grid--1' : 'shelf-grid--2'"
+    >
+      <PlaylistCard v-for="p in list" :key="p.id" :playlist="p" :cols="cols" />
+      <button type="button" class="shelf-add" :class="`shelf-add--${cols}`" @click="showInsert = true">
+        <span class="shelf-add__mark" aria-hidden="true">+</span>
+        <span class="shelf-add__copy">添加歌单</span>
+      </button>
+    </div>
+
+    <div v-if="!loading && list.length === 0" class="shelf-empty">
+      <p class="font-display text-3xl m-0">还没有歌单</p>
+      <p class="text-mute mt-2 mb-0">选择平台，粘贴链接即可。</p>
     </div>
 
     <Modal
@@ -214,21 +159,141 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.shelf-spines {
-  /* Mobile: full-width horizontal strip */
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  flex-shrink: 0;
-  scrollbar-gutter: stable;
+.shelf-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.7rem 1rem;
+  margin-bottom: 1.25rem;
 }
 
-@media (min-width: 1024px) {
-  .shelf-spines {
-    /* Desktop: cap width so track panel always keeps room */
-    width: min(22rem, 38vw);
-    max-width: 38vw;
-    flex: 0 0 auto;
+.shelf-title {
+  margin: 0;
+  font-family: 'ZCOOL XiaoWei', 'Noto Serif SC', serif;
+  font-size: 1.85rem;
+  line-height: 1.1;
+  font-weight: 400;
+}
+
+.shelf-lede {
+  margin: 0.4rem 0 0;
+  font-size: 0.875rem;
+  color: var(--mute);
+}
+
+.shelf-cols {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.shelf-cols__btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 2.4rem;
+  padding: 0 0.75rem;
+  border: 0;
+  background: transparent;
+  color: var(--mute);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.shelf-cols__btn + .shelf-cols__btn {
+  border-left: 1px solid var(--border);
+}
+
+.shelf-cols__btn.is-on {
+  background: var(--wine);
+  color: var(--fg);
+}
+
+html[data-theme-mode='light'] .shelf-cols__btn.is-on {
+  color: var(--card);
+}
+
+.shelf-grid {
+  display: grid;
+  gap: 1.15rem 0.85rem;
+}
+
+.shelf-grid--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.shelf-grid--1 {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.65rem;
+}
+
+.shelf-add {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 0;
+  padding: 0.8rem;
+  border: 1px dashed var(--border);
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+  color: var(--foil);
+  cursor: pointer;
+  font: inherit;
+}
+
+.shelf-add--2 {
+  aspect-ratio: 1;
+}
+
+.shelf-add--1 {
+  min-height: 7.25rem;
+}
+
+.shelf-add__mark {
+  font-size: 1.8rem;
+  font-weight: 300;
+  line-height: 1;
+}
+
+.shelf-add__copy {
+  font-size: 0.85rem;
+}
+
+.shelf-add:hover,
+.shelf-add:focus-visible {
+  border-color: var(--foil);
+  background: var(--surface);
+}
+
+.shelf-empty {
+  margin-top: 2.5rem;
+}
+
+@media (min-width: 768px) {
+  .shelf-title {
+    font-size: 2.5rem;
+  }
+
+  .shelf-cols {
+    display: none;
+  }
+
+  .shelf-grid,
+  .shelf-grid--1,
+  .shelf-grid--2 {
+    grid-template-columns: repeat(auto-fill, minmax(14.25rem, 1fr));
+    gap: 1.25rem 1.1rem;
+  }
+
+  .shelf-add--1,
+  .shelf-add--2 {
+    aspect-ratio: 1;
+    min-height: 0;
   }
 }
 </style>

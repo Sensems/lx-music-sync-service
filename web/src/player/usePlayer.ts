@@ -193,12 +193,19 @@ function createPlayer(): PlayerApi {
     currentTime.value = 0
     duration.value = 0
 
+    void loadLyrics(item, seq)
     try {
-      if (item.musicInfo) {
-        await api.rememberStream(item.musicInfo)
+      // 播放走曲库 id。搜索结果还没有 id 时先入库，音源地址由这一条打开路径去要。
+      let songId = item.songId
+      if (!songId && item.musicInfo) {
+        const saved = await api.addLibraryTrack(item.musicInfo)
+        songId = String(saved.songId)
+        if (seq !== loadSeq) return
+        patchCurrent({ songId })
       }
+      if (!songId) throw new Error('暂时没有可播放的地址')
       if (seq !== loadSeq) return
-      audio.src = api.streamUrl(item.songKey)
+      audio.src = api.streamUrl(songId)
       audio.load()
       await audio.play()
       if (seq !== loadSeq) return
@@ -206,7 +213,6 @@ function createPlayer(): PlayerApi {
       bindMediaHandlers()
       syncMediaMetadata(item)
       syncMediaPlaybackState()
-      void loadLyrics(item, seq)
     } catch {
       if (seq !== loadSeq) return
       error.value = '暂时没有可播放的地址'
@@ -218,6 +224,25 @@ function createPlayer(): PlayerApi {
     }
   }
 
+  function patchCurrent(partial: Partial<PlayItem>) {
+    const i = index.value
+    const cur = queue.value[i]
+    if (!cur) return
+    const next = queue.value.slice()
+    next[i] = { ...cur, ...partial }
+    queue.value = next
+  }
+
+  function linesFromLyric(raw: string): LyricLine[] {
+    const parsed = parseLrc(raw)
+    if (parsed.length > 0) return parsed
+    return raw
+      .split(/\r?\n/)
+      .map(text => text.trim())
+      .filter(text => text && !text.startsWith('['))
+      .map((text, i) => ({ time: i, text }))
+  }
+
   async function loadLyrics(item: PlayItem, seq: number) {
     try {
       const body = await api.lyricsFor(
@@ -226,8 +251,13 @@ function createPlayer(): PlayerApi {
           : { songKey: item.songKey },
       )
       if (seq !== loadSeq) return
-      lyricLines.value = parseLrc(body.lyric || '')
+      lyricLines.value = linesFromLyric(body.lyric || '')
       lyricIndex.value = activeLineIndex(lyricLines.value, audio?.currentTime ?? 0)
+      const picUrl = String(body.picUrl || '').trim()
+      if (picUrl && picUrl !== 'null' && picUrl !== item.picUrl) {
+        patchCurrent({ picUrl })
+        syncMediaMetadata({ ...item, picUrl })
+      }
     } catch {
       if (seq !== loadSeq) return
       lyricLines.value = []
@@ -384,19 +414,32 @@ function createPlayer(): PlayerApi {
     shuffle.value = v
   }
 
+  async function routerRef() {
+    const { default: router } = await import('../router.js')
+    return router
+  }
+
   function expand(): void {
-    expanded.value = true
+    void routerRef().then(router => {
+      if (router.currentRoute.value.name === 'now') return
+      void router.push({ name: 'now' })
+    })
   }
 
   function collapse(): void {
-    expanded.value = false
     carMode.value = false
     showQueue.value = false
+    void routerRef().then(router => {
+      if (router.currentRoute.value.name !== 'now') return
+      const back = typeof window !== 'undefined' ? window.history.state?.back : null
+      if (back != null) router.back()
+      else void router.replace({ name: 'shelf' })
+    })
   }
 
   function enterCar(): void {
     carMode.value = true
-    expanded.value = true
+    expand()
   }
 
   function exitCar(): void {

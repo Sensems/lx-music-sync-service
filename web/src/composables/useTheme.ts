@@ -33,6 +33,9 @@ function ensureWatcher() {
       applyThemeTokens(appTheme.tokens)
       document.documentElement.dataset.theme = id
       document.documentElement.dataset.themeMode = appTheme.mode
+      document.documentElement.style.colorScheme = appTheme.mode
+      const themeColor = document.querySelector('meta[name="theme-color"]')
+      if (themeColor) themeColor.setAttribute('content', appTheme.tokens.cabinet)
       try {
         localStorage.setItem(THEME_STORAGE_KEY, id)
       } catch {

@@ -6,6 +6,7 @@ import { cachePlaylist, cacheSong } from '../library/cache.js'
 import { ingestTrackFromMusic } from '../library/normalize.js'
 import { setSubsonicPassword } from '../library/password.js'
 import { scanRoot } from '../library/scan.js'
+import { createOpenSong } from '../library/openSong.js'
 import { createSubscription, refreshSubscription } from '../library/subscribe.js'
 import { upsertTrack } from '../library/upsert.js'
 import { pickQuality, QUALITYS } from '../lib/names.js'
@@ -260,6 +261,64 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>
 }
 
+function httpPic(value: string): string {
+  return /^https?:\/\//i.test(value) ? value : ''
+}
+
+type ListedSong = {
+  song_id: string
+  title: string
+  album: string
+  cover_url: string
+  singer: string
+  platform: string | null
+  platform_song_id: string | null
+  raw: unknown
+  downloaded: boolean
+  quality: string | null
+}
+
+/** 网页播放和歌词都要一份 MusicInfo。没有平台身份时只回曲库字段，播放走本地文件。 */
+function listedSong(row: ListedSong) {
+  const platform = asPlatform(row.platform)
+  const music = platform && row.platform_song_id
+    ? musicInfoFrom(platform, row.platform_song_id, row.raw)
+    : null
+  if (music) {
+    if (!music.name) music.name = row.title
+    if (!music.singer) music.singer = row.singer
+  }
+  return {
+    songId: row.song_id,
+    name: row.title,
+    singer: row.singer,
+    album: row.album,
+    downloaded: row.downloaded,
+    quality: row.quality ?? '',
+    picUrl: httpPic(row.cover_url),
+    source: platform ?? '',
+    musicInfo: music,
+  }
+}
+
+const LISTED_SONG_SQL = `
+  s.id::text AS song_id,
+  s.title,
+  al.title AS album,
+  al.cover_url,
+  COALESCE((
+    SELECT string_agg(ar.name, ' / ' ORDER BY sa.position)
+    FROM song_artists sa
+    JOIN artists ar ON ar.id = sa.artist_id
+    WHERE sa.song_id = s.id
+  ), '') AS singer,
+  src.platform,
+  src.platform_song_id,
+  src.raw,
+  (mf.song_id IS NOT NULL AND mf.missing = false) AS downloaded,
+  mf.quality
+`
+
 /**
  * 没有 raw.id 时按入库规则补上。
  * 酷狗 id 已经是 songmid_hash，再加 kg_ 前缀脚本会对不上。
@@ -423,6 +482,16 @@ export async function enqueueScheduledWork(deps: ManageDeps): Promise<void> {
 }
 
 export function mountManage(app: Hono, deps: ManageDeps): void {
+  // 和 Subsonic 各持一份地址缓存。网页拖进度不能每次都再问脚本要地址。
+  const playback = { order: [...PLATFORMS], quality: '128k' as Quality }
+  const openSong = createOpenSong({
+    pool: deps.pool,
+    getMusicUrl: deps.getMusicUrl,
+    sourceOrder: () => playback.order,
+    wantedQuality: () => playback.quality,
+    getStatus: () => deps.runtime.getStatus(),
+  })
+
   app.post('/api/subscriptions', async (c) => {
     const body = await readJson(c)
     const platform = asPlatform(body.platform)
@@ -439,21 +508,64 @@ export function mountManage(app: Hono, deps: ManageDeps): void {
   })
 
   app.get('/api/subscriptions', async (c) => {
-    const found = await deps.pool.query<{
-      id: string
-      kind: string
-      name: string
-      source_url: string
-      platform: string
-      created_at: Date
-      updated_at: Date
-    }>(
-      `SELECT id::text AS id, kind, name, source_url, platform, created_at, updated_at
-       FROM playlists
-       WHERE kind = 'subscription'
-       ORDER BY id`,
+    const found = await deps.pool.query(
+      `SELECT p.id::text AS id,
+              p.name,
+              p.source_url,
+              p.platform,
+              COALESCE(stats.track_count, 0) AS track_count,
+              COALESCE(stats.cached_count, 0) AS cached_count,
+              COALESCE(stats.cover_url, '') AS cover_url
+       FROM playlists p
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS track_count,
+                COUNT(*) FILTER (
+                  WHERE mf.song_id IS NOT NULL AND mf.missing = false
+                )::int AS cached_count,
+                COALESCE(
+                  (ARRAY_AGG(al.cover_url) FILTER (WHERE al.cover_url <> ''))[1],
+                  ''
+                ) AS cover_url
+         FROM playlist_items i
+         JOIN songs s ON s.id = i.song_id
+         JOIN albums al ON al.id = s.album_id
+         LEFT JOIN media_files mf ON mf.song_id = s.id
+         WHERE i.playlist_id = p.id
+       ) stats ON true
+       WHERE p.kind = 'subscription'
+       ORDER BY p.id`,
     )
     return c.json({ list: found.rows })
+  })
+
+  app.get('/api/subscriptions/:id/tracks', async (c) => {
+    const id = c.req.param('id')
+    if (!isLibraryId(id)) return c.json({ error: 'not found' }, 404)
+    const playlist = await deps.pool.query<{ platform: string }>(
+      `SELECT platform FROM playlists WHERE id = $1::bigint AND kind = 'subscription'`,
+      [id],
+    )
+    const platform = playlist.rows[0]?.platform
+    if (!platform) return c.json({ error: 'not found' }, 404)
+    // 同一首歌可能挂着多个平台。优先用这份订阅自己的身份，歌词和音源才对得上。
+    const found = await deps.pool.query<ListedSong>(
+      `SELECT ${LISTED_SONG_SQL}
+       FROM playlist_items i
+       JOIN songs s ON s.id = i.song_id
+       JOIN albums al ON al.id = s.album_id
+       LEFT JOIN LATERAL (
+         SELECT platform, platform_song_id, raw
+         FROM song_sources
+         WHERE song_id = s.id
+         ORDER BY (platform = $2) DESC, platform
+         LIMIT 1
+       ) src ON true
+       LEFT JOIN media_files mf ON mf.song_id = s.id
+       WHERE i.playlist_id = $1::bigint
+       ORDER BY i.position`,
+      [id, platform],
+    )
+    return c.json({ list: found.rows.map(listedSong) })
   })
 
   app.post('/api/subscriptions/:id/refresh', async (c) => {
@@ -487,6 +599,37 @@ export function mountManage(app: Hono, deps: ManageDeps): void {
     const page = Math.max(1, Number(c.req.query('page') || '1') || 1)
     const result = await deps.search.searchMusic(source, q, page)
     return c.json(result)
+  })
+
+  app.get('/api/library/cached', async (c) => {
+    const found = await deps.pool.query<ListedSong>(
+      `SELECT ${LISTED_SONG_SQL}
+       FROM media_files mf
+       JOIN songs s ON s.id = mf.song_id
+       JOIN albums al ON al.id = s.album_id
+       LEFT JOIN LATERAL (
+         SELECT platform, platform_song_id, raw
+         FROM song_sources
+         WHERE song_id = s.id
+         ORDER BY platform
+         LIMIT 1
+       ) src ON true
+       WHERE mf.missing = false
+       ORDER BY s.id DESC`,
+    )
+    return c.json({ list: found.rows.map(listedSong) })
+  })
+
+  app.get('/api/library/songs/:id/stream', async (c) => {
+    const id = c.req.param('id')
+    if (!isLibraryId(id)) return c.json({ error: 'not found' }, 404)
+    const [orderRaw, qualityRaw] = await Promise.all([
+      readSetting(deps.pool, 'sourceOrder'),
+      readSetting(deps.pool, 'quality'),
+    ])
+    playback.order = parseSourceOrder(orderRaw)
+    playback.quality = parseQuality(qualityRaw)
+    return openSong.open(id, c.req.header('range'))
   })
 
   app.post('/api/library/tracks', async (c) => {

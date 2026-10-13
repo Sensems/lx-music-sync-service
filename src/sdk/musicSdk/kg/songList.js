@@ -5,6 +5,14 @@ import { signatureParams } from './util.js'
 
 // UMD/CJS vendor; package is "type":"module", so load via createRequire + .cjs
 const require = createRequire(import.meta.url)
+// Node 20 没有 navigator；infSign 在求值时就会读 userAgent。空 UA 让 isInClient()
+// 为 false，走 H5 签名，不会再碰 document / window。
+if (typeof globalThis.navigator === 'undefined') {
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { userAgent: '' },
+    configurable: true,
+  })
+}
 const infSign = require('./vendors/infSign.min.cjs')
 
 const handleSignature = (id, page, limit) => new Promise((resolve, reject) => {

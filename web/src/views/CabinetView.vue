@@ -1,23 +1,22 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { Input, InputNumber, Select, Switch, Upload, message } from 'ant-design-vue'
+import { Input, Select, Switch, Upload, message } from 'ant-design-vue'
 import type { UploadRequestOption } from 'ant-design-vue/es/vc-upload/interface'
 import { api } from '../api'
+import { sourceLabels } from '../mock/data'
 import { useTheme } from '../composables/useTheme'
 import { themeList, type ThemeId } from '../themes'
 
 const settings = reactive({
-  savePath: './data/music',
-  quality: '320k',
+  quality: '128k',
+  sourceOrder: 'kw,kg,tx,wy,mg',
   scheduleOn: false,
   schedule: 'every-6h',
   scheduleTime: '03:00',
-  cron: '0 */6 * * *',
-  concurrency: 3,
-  fileName: 'name-singer',
-  proxyOn: false,
-  proxyHost: '127.0.0.1',
-  proxyPort: 7890,
+  cron: '',
+  scanWithSchedule: false,
+  subsonicUser: 'tinggui',
+  subsonicPassword: '',
 })
 
 const sourceMeta = ref({
@@ -46,11 +45,13 @@ const scheduleOptions = [
   { value: 'cron', label: '自定义 cron' },
 ]
 
-const nameOptions = [
-  { value: 'name-singer', label: '歌名 - 歌手' },
-  { value: 'singer-name', label: '歌手 - 歌名' },
-  { value: 'name', label: '歌名' },
-]
+function sourceOrderOk(value: string): boolean {
+  const parts = value.split(',').map(part => part.trim()).filter(part => part.length > 0)
+  if (parts.length !== 5) return false
+  const seen = new Set(parts)
+  if (seen.size !== 5) return false
+  return parts.every(part => part in sourceLabels)
+}
 
 function applySourceStatus(status: Record<string, unknown>, fallbackName = '') {
   const ok = status.ok === true || status.ok === '1'
@@ -65,18 +66,21 @@ function applySourceStatus(status: Record<string, unknown>, fallbackName = '') {
 }
 
 function applySettings(body: Record<string, unknown>) {
-  settings.savePath = String(body.savePath ?? './data/music')
-  settings.quality = String(body.quality ?? '320k')
+  settings.quality = String(body.quality ?? '128k')
+  settings.sourceOrder = String(body.sourceOrder ?? 'kw,kg,tx,wy,mg')
   settings.scheduleOn = body.scheduleOn === '1' || body.scheduleOn === true
   settings.schedule = String(body.schedule ?? 'every-6h')
   settings.scheduleTime = String(body.scheduleTime ?? '03:00')
-  settings.cron = String(body.cron ?? '0 */6 * * *')
-  settings.concurrency = Number(body.concurrency ?? 3) || 3
-  settings.fileName = String(body.fileName ?? 'name-singer')
-  settings.proxyOn = body.proxyOn === '1' || body.proxyOn === true
-  settings.proxyHost = String(body.proxyHost || '127.0.0.1')
-  settings.proxyPort = Number(body.proxyPort || 7890) || 7890
-  applySourceStatus(body)
+  settings.cron = String(body.cron ?? '')
+  settings.scanWithSchedule = body.scanWithSchedule === '1' || body.scanWithSchedule === true
+  settings.subsonicUser = String(body.subsonicUser ?? 'tinggui')
+  settings.subsonicPassword = ''
+  applySourceStatus({
+    ok: body.sourceOk,
+    name: body.name,
+    version: body.version,
+    message: body.sourceMessage,
+  })
 }
 
 async function load() {
@@ -89,25 +93,29 @@ async function load() {
 }
 
 async function save() {
+  if (!sourceOrderOk(settings.sourceOrder)) {
+    message.error('音源顺序要写满五个平台，各一次')
+    return
+  }
   saving.value = true
   try {
-    const body = await api.putSettings({
-      savePath: settings.savePath,
+    const payload: Record<string, string> = {
       quality: settings.quality,
+      sourceOrder: settings.sourceOrder.split(',').map(part => part.trim()).join(','),
       scheduleOn: settings.scheduleOn ? '1' : '0',
       schedule: settings.schedule,
       scheduleTime: settings.scheduleTime,
       cron: settings.cron,
-      concurrency: String(settings.concurrency),
-      fileName: settings.fileName,
-      proxyOn: settings.proxyOn ? '1' : '0',
-      proxyHost: settings.proxyHost,
-      proxyPort: String(settings.proxyPort),
-    })
+      scanWithSchedule: settings.scanWithSchedule ? '1' : '0',
+      subsonicUser: settings.subsonicUser.trim(),
+    }
+    if (settings.subsonicPassword.length > 0) payload.subsonicPassword = settings.subsonicPassword
+    const body = await api.putSettings(payload)
     applySettings(body)
     message.success('设置已保存')
-  } catch {
-    message.error('保存失败')
+  } catch (err) {
+    const text = err instanceof Error ? err.message : ''
+    message.error(text === 'invalid cron' ? '这组定时表达式不能用' : '保存失败')
   } finally {
     saving.value = false
   }
@@ -156,15 +164,16 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="page-panel max-w-2xl">
-    <h2 class="font-display text-4xl m-0">设置</h2>
-    <p class="text-mute mt-2">管理音源、下载目录和外观。服务监听地址仍在配置文件里修改。</p>
+  <section class="page-panel page-measure">
+    <p class="page-kicker">CABINET</p>
+    <h2 class="font-display text-3xl md:text-4xl m-0">设置</h2>
+    <p class="text-mute mt-2">管理音源、音质和定时。服务监听地址仍在配置文件里修改。</p>
 
-    <div class="mt-8 p-5 md:p-7 flex flex-col gap-6 cabinet-card">
+    <div class="mt-6 md:mt-8 p-4 sm:p-5 md:p-7 flex flex-col gap-6 cabinet-card">
       <div>
         <h3 class="font-display text-2xl m-0">外观主题</h3>
         <p class="text-sm text-mute mt-1 mb-3">选择一套配色，偏好保存在本机浏览器。</p>
-        <div class="theme-grid">
+        <div class="theme-grid stagger-in">
           <button
             v-for="t in themeList"
             :key="t.id"
@@ -196,30 +205,31 @@ onMounted(() => {
         <p class="font-mono text-xs text-foil m-0 mb-3">{{ sourceMeta.status }}</p>
         <div class="flex flex-wrap gap-2 mb-3">
           <Upload :show-upload-list="false" accept=".js" :custom-request="uploadScript">
-            <a-button class="stamp">上传 .js</a-button>
+            <a-button type="primary" class="stamp !h-11 !text-ink">上传 .js</a-button>
           </Upload>
         </div>
         <label class="block">
           <span class="block text-sm text-mute mb-1">在线导入（http/https 直链）</span>
           <div class="flex flex-col sm:flex-row gap-2">
             <Input v-model:value="importUrl" placeholder="https://example.com/source.js" class="flex-1" />
-            <a-button class="stamp" :loading="importing" @click="importFromUrl">在线导入</a-button>
+            <a-button type="primary" class="stamp !h-11 !text-ink" :loading="importing" @click="importFromUrl">在线导入</a-button>
           </div>
         </label>
       </div>
-
-      <label class="block">
-        <span class="block text-sm text-mute mb-1">下载根目录</span>
-        <Input v-model:value="settings.savePath" />
-      </label>
 
       <label class="block">
         <span class="block text-sm text-mute mb-1">默认音质</span>
         <Select v-model:value="settings.quality" :options="qualityOptions" />
       </label>
 
+      <label class="block">
+        <span class="block text-sm text-mute mb-1">音源顺序</span>
+        <Input v-model:value="settings.sourceOrder" class="font-mono" placeholder="kw,kg,tx,wy,mg" />
+        <span class="block text-sm text-mute mt-1">五个平台各写一次。播放和缓存按这个顺序试。{{ Object.values(sourceLabels).join('、') }}。</span>
+      </label>
+
       <div class="flex items-center justify-between gap-3">
-        <span>定时同步</span>
+        <span>定时刷新订阅</span>
         <Switch v-model:checked="settings.scheduleOn" />
       </div>
       <label v-if="settings.scheduleOn" class="block">
@@ -238,33 +248,21 @@ onMounted(() => {
         <span class="block text-sm text-mute mb-1">cron</span>
         <Input v-model:value="settings.cron" class="font-mono" />
       </label>
-
-      <label class="block">
-        <span class="block text-sm text-mute mb-1">同时下载数</span>
-        <InputNumber v-model:value="settings.concurrency" :min="1" :max="6" class="w-full" />
-      </label>
-
-      <label class="block">
-        <span class="block text-sm text-mute mb-1">文件名格式</span>
-        <Select v-model:value="settings.fileName" :options="nameOptions" />
-      </label>
-
-      <div class="flex items-center justify-between gap-3">
-        <span>网络代理</span>
-        <Switch v-model:checked="settings.proxyOn" />
-      </div>
-      <div v-if="settings.proxyOn" class="grid grid-cols-1 md:grid-cols-[1fr_8rem] gap-3">
-        <label>
-          <span class="block text-sm text-mute mb-1">主机</span>
-          <Input v-model:value="settings.proxyHost" />
-        </label>
-        <label>
-          <span class="block text-sm text-mute mb-1">端口</span>
-          <InputNumber v-model:value="settings.proxyPort" :min="1" :max="65535" class="w-full" />
-        </label>
+      <div v-if="settings.scheduleOn" class="flex items-center justify-between gap-3">
+        <span>定时时一并扫描目录</span>
+        <Switch v-model:checked="settings.scanWithSchedule" />
       </div>
 
-      <a-button type="primary" class="stamp !text-ink self-start" :loading="saving" @click="save">保存设置</a-button>
+      <label class="block">
+        <span class="block text-sm text-mute mb-1">Subsonic 用户名</span>
+        <Input v-model:value="settings.subsonicUser" autocomplete="off" />
+      </label>
+      <label class="block">
+        <span class="block text-sm text-mute mb-1">Subsonic 口令</span>
+        <Input v-model:value="settings.subsonicPassword" type="password" autocomplete="new-password" placeholder="留空则不修改" />
+      </label>
+
+      <a-button type="primary" class="stamp !text-ink self-stretch sm:self-start !h-11" :loading="saving" @click="save">保存设置</a-button>
     </div>
   </section>
 </template>
@@ -272,8 +270,15 @@ onMounted(() => {
 <style scoped>
 .theme-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
   gap: 0.75rem;
+}
+
+@media (max-width: 767px) {
+  .theme-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
 }
 
 .theme-swatch {

@@ -63,8 +63,22 @@ type UrlCacheEntry = {
   expiresAt: number
 }
 
+/**
+ * Feishin 这类客户端把 audio 设成 crossOrigin=anonymous，好接 Web Audio。
+ * 响应里没有这些头时，浏览器直接丢掉音频，界面就停在等待。
+ */
+function applyPlaybackCors(headers: Headers): void {
+  headers.set('Access-Control-Allow-Origin', '*')
+  headers.set(
+    'Access-Control-Expose-Headers',
+    'Accept-Ranges, Content-Length, Content-Range, Content-Type',
+  )
+}
+
 function unavailable(): Response {
-  return Response.json({ error: PLAY_ERROR }, { status: 404 })
+  const headers = new Headers()
+  applyPlaybackCors(headers)
+  return Response.json({ error: PLAY_ERROR }, { status: 404, headers })
 }
 
 /** 歌曲 id 是 bigint 的十进制文本。非法值直接 404，避免把转换错误抛成 500。 */
@@ -175,28 +189,26 @@ function serveLocalFile(filePath: string, size: number, rangeHeader: string | un
     const { start, end } = range
     const nodeStream = createReadStream(filePath, { start, end })
     const body = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>
-    return new Response(body, {
-      status: 206,
-      headers: {
-        'Content-Type': type,
-        'Accept-Ranges': 'bytes',
-        'Content-Range': `bytes ${start}-${end}/${size}`,
-        'Content-Length': String(end - start + 1),
-      },
+    const headers = new Headers({
+      'Content-Type': type,
+      'Accept-Ranges': 'bytes',
+      'Content-Range': `bytes ${start}-${end}/${size}`,
+      'Content-Length': String(end - start + 1),
     })
+    applyPlaybackCors(headers)
+    return new Response(body, { status: 206, headers })
   }
 
   // 认不出或超出文件的 Range 按整文件送。播放器拿到 200 仍能开声。
   const nodeStream = createReadStream(filePath)
   const body = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>
-  return new Response(body, {
-    status: 200,
-    headers: {
-      'Content-Type': type,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': String(size),
-    },
+  const headers = new Headers({
+    'Content-Type': type,
+    'Accept-Ranges': 'bytes',
+    'Content-Length': String(size),
   })
+  applyPlaybackCors(headers)
+  return new Response(body, { status: 200, headers })
 }
 
 function cacheKey(songId: string, quality: Quality): string {
@@ -264,6 +276,7 @@ function forwardRemote(remote: RemoteResult): Response {
   if (contentLength) headers.set('Content-Length', contentLength)
   // 播放器靠这个头才继续发 Range。上游没带时也补上。
   headers.set('Accept-Ranges', 'bytes')
+  applyPlaybackCors(headers)
   return new Response(remote.body, { status: remote.status, headers })
 }
 
