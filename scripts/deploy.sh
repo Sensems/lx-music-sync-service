@@ -5,7 +5,8 @@
 #   ./scripts/deploy.sh                 # 拉代码 + 装依赖 + 构建前端 + 重载 PM2
 #   ./scripts/deploy.sh --no-pull       # 不拉代码（已在本地更新过代码时）
 #   ./scripts/deploy.sh --skip-install  # 跳过依赖安装
-#   ./scripts/deploy.sh --skip-build    # 跳过前端构建
+#   ./scripts/deploy.sh --skip-build    # 跳过前端构建（仍会装前端依赖）
+#   ./scripts/deploy.sh --skip-frontend # 跳过前端部署（不装前端依赖、不构建）
 #
 # 曲库在 Postgres。config.yaml 里的 databaseUrl 要自己填，脚本不会写连接串。
 # 清空曲库和缓存：node scripts/reset.mjs --yes
@@ -25,6 +26,7 @@ PM2_CONFIG="ecosystem.config.cjs"
 PULL=1
 INSTALL=1
 BUILD=1
+FRONTEND=1
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
@@ -39,6 +41,7 @@ for arg in "$@"; do
     --no-pull) PULL=0 ;;
     --skip-install) INSTALL=0 ;;
     --skip-build) BUILD=0 ;;
+    --skip-frontend) FRONTEND=0 ;;
     -h | --help)
       usage
       exit 0
@@ -80,12 +83,14 @@ if [ "$INSTALL" = 1 ]; then
     npm install
   fi
 
-  log '安装前端依赖（npm ci）'
-  npm --prefix web ci
+  if [ "$FRONTEND" = 1 ]; then
+    log '安装前端依赖（npm ci）'
+    npm --prefix web ci
+  fi
 fi
 
 # 3) 构建前端 —— 服务端只从 web/dist 托管静态资源，产物不入库
-if [ "$BUILD" = 1 ]; then
+if [ "$FRONTEND" = 1 ] && [ "$BUILD" = 1 ]; then
   log '构建前端'
   npm --prefix web run build
 fi

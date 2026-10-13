@@ -341,7 +341,8 @@ npm i -g pm2
 
 | 参数 / 变量 | 作用 |
 | --- | --- |
-| `--no-pull` / `--skip-install` / `--skip-build` | 跳过对应步骤 |
+| `--no-pull` / `--skip-install` / `--skip-build` | 跳过对应步骤（`--skip-build` 仍会装前端依赖） |
+| `--skip-frontend` | 跳过前端部署：不装前端依赖、不构建，沿用已有的 `web/dist` |
 | `HOST=0.0.0.0` / `PORT=9000` | 覆盖 `config.yaml` 的监听地址 / 端口 |
 | `USER_API_SCRIPT=/tmp/current.js` | 复制成 `data/user-api/current.js` |
 

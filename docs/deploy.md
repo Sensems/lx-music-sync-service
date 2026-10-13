@@ -38,7 +38,8 @@ npm i -g pm2
 | --- | --- |
 | `--no-pull` | 不执行 `git pull` |
 | `--skip-install` | 跳过依赖安装 |
-| `--skip-build` | 跳过前端构建 |
+| `--skip-build` | 跳过前端构建（仍会装前端依赖） |
+| `--skip-frontend` | 跳过前端部署：不装前端依赖、不构建，沿用已有的 `web/dist` |
 | `HOST=0.0.0.0` | 覆盖 `config.yaml` 的 host |
 | `PORT=9000` | 覆盖 `config.yaml` 的 port |
 | `USER_API_SCRIPT=/tmp/current.js` | 复制成 `data/user-api/current.js` |
