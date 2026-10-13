@@ -1451,6 +1451,29 @@ async function deletePlaylist(c: Context, deps: SubsonicDeps, format: Format): P
 }
 
 /**
+ * Symfonium 同步整库时 query 是空的，或 `""`，或 `*`。
+ * 歌单走 getPlaylists，不经过这里。把这些当成普通关键词，曲库就是空的，歌单却还在。
+ * 有正文时去掉包在外面的引号。
+ */
+function searchText(raw: string): string | null {
+  let text = raw.trim()
+  if (
+    text.length >= 2
+    && ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'")))
+  ) {
+    text = text.slice(1, -1).trim()
+  }
+  if (text === '' || text === '*') return null
+  return text
+}
+
+/** `%` 和 `_` 按字面匹配，避免搜一个下划线就把整库放出来。 */
+function likePattern(text: string): string {
+  const escaped = text.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')
+  return `%${escaped}%`
+}
+
+/**
  * 只查 Postgres。在线搜索不是 Subsonic 的 search2 / search3。
  * 一个搜索框对着歌名、专辑名、歌手名，所以歌曲和专辑不只匹配自己的标题。
  */
@@ -1474,6 +1497,8 @@ async function searchLibrary(
   const artistOffset = bounded(c.req.query('artistOffset'), 0, 1_000_000)
   const albumOffset = bounded(c.req.query('albumOffset'), 0, 1_000_000)
   const songOffset = bounded(c.req.query('songOffset'), 0, 1_000_000)
+  const text = searchText(query)
+  const pattern = text == null ? null : likePattern(text)
 
   const artists = artistCount === 0
     ? []
@@ -1484,35 +1509,43 @@ async function searchLibrary(
               st.created_at AS starred_at
        FROM artists ar
        LEFT JOIN stars st ON st.target_type = 'artist' AND st.target_id = ar.id
-       WHERE ar.name ILIKE '%' || $1 || '%'
+       ${pattern == null ? '' : `WHERE ar.name ILIKE $1 ESCAPE '\\'`}
        ORDER BY ar.name ASC, ar.id ASC
-       LIMIT $2 OFFSET $3`,
-      [query, artistCount, artistOffset],
+       LIMIT $${pattern == null ? 1 : 2} OFFSET $${pattern == null ? 2 : 3}`,
+      pattern == null ? [artistCount, artistOffset] : [pattern, artistCount, artistOffset],
     )).rows
   const albums = albumCount === 0
     ? []
     : await albumsWhere(
       deps.pool,
-      `WHERE al.title ILIKE '%' || $1 || '%' OR ar.name ILIKE '%' || $1 || '%'`,
-      'al.title ASC, al.id ASC LIMIT $2 OFFSET $3',
-      [query, albumCount, albumOffset],
+      pattern == null
+        ? ''
+        : `WHERE al.title ILIKE $1 ESCAPE '\\' OR ar.name ILIKE $1 ESCAPE '\\'`,
+      pattern == null
+        ? 'al.title ASC, al.id ASC LIMIT $1 OFFSET $2'
+        : 'al.title ASC, al.id ASC LIMIT $2 OFFSET $3',
+      pattern == null ? [albumCount, albumOffset] : [pattern, albumCount, albumOffset],
     )
   const songs = songCount === 0
     ? []
     : await songsWhere(
       deps.pool,
-      `WHERE s.title ILIKE '%' || $1 || '%'
-          OR al.title ILIKE '%' || $1 || '%'
-          OR aa.name ILIKE '%' || $1 || '%'
+      pattern == null
+        ? ''
+        : `WHERE s.title ILIKE $1 ESCAPE '\\'
+          OR al.title ILIKE $1 ESCAPE '\\'
+          OR aa.name ILIKE $1 ESCAPE '\\'
           OR EXISTS (
             SELECT 1
             FROM song_artists sa
             JOIN artists ar ON ar.id = sa.artist_id
             WHERE sa.song_id = s.id
-              AND ar.name ILIKE '%' || $1 || '%'
+              AND ar.name ILIKE $1 ESCAPE '\\'
           )`,
-      's.title ASC, s.id ASC LIMIT $2 OFFSET $3',
-      [query, songCount, songOffset],
+      pattern == null
+        ? 's.title ASC, s.id ASC LIMIT $1 OFFSET $2'
+        : 's.title ASC, s.id ASC LIMIT $2 OFFSET $3',
+      pattern == null ? [songCount, songOffset] : [pattern, songCount, songOffset],
     )
   return sendOk(c, {
     [key]: {
